@@ -1,0 +1,536 @@
+#include "main.h"
+#include "lemlib/api.hpp" // IWYU pragma: keep
+#include "lemlib/chassis/trackingWheel.hpp"
+#include "pros/abstract_motor.hpp"
+#include "pros/adi.hpp"
+#include "pros/misc.h"
+#include "pros/motors.h"
+#include "pros/rtos.hpp"
+#include <stdlib.h>
+#include <sys/_intsup.h>
+
+// controller
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
+
+// motor groups
+pros::MotorGroup rightMotors({1, 7, 15},
+                            pros::MotorGearset::blue); // left motor group - ports 3 (reversed), 4, 5 (reversed)
+pros::MotorGroup leftMotors({-3, -4, -5}, pros::MotorGearset::blue); // right motor group - ports 6, 7, 9 (reversed)
+
+pros::Motor topRoller (10, pros::MotorGearset::green);
+pros::Motor midRoller(-11, pros::MotorGearset::blue);
+pros::Motor bottomRoller(-14, pros::MotorGearset::green);
+pros::adi::DigitalOut hood('A');
+pros::adi::DigitalOut matchload('B');//idk
+pros::adi::DigitalOut wing('C');
+pros::adi::DigitalOut intakeLift('D');//idk
+
+//pros::adi::DigitalOut littleWill('A');
+
+
+
+
+
+// Inertial Sensor on port 10
+pros::Imu imu(8);
+
+// tracking wheels
+// horizontal tracking wheel encoder. Rotation sensor, port 20, not reversed
+pros::Rotation horizontalEnc(-13);
+// vertical tracking wheel encoder. Rotation sensor, port 11, reversed
+pros::Rotation verticalEnc(-2);
+// horizontal tracking wheel. 2.75" diameter, 5.75" offset, back of the robot (negative)
+lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, -4.523);
+// vertical tracking wheel. 2.75" diameter, 2.5" offset, left of the robot (negative)
+lemlib::TrackingWheel vertical(&verticalEnc, lemlib::Omniwheel::NEW_2, -0.5);
+
+// drivetrain settings
+lemlib::Drivetrain drivetrain(&leftMotors, // left motor group
+                              &rightMotors, // right motor group
+                              10.1, // 10 inch track width
+                              lemlib::Omniwheel::NEW_325, // using new 4" omnis
+                              450, // drivetrain rpm is 360
+                              1 // horizontal drift is 2. If we had traction wheels, it would have been 8
+);
+
+// lateral motion controller
+lemlib::ControllerSettings linearController(5.4, // proportional gain (kP)
+                                            0.2, // integral gain (kI)
+                                            3.3, // derivative gain (kD)
+                                            3, // anti windup
+                                            .8, // small error range, in inches
+                                            100, // small error range timeout, in milliseconds
+                                            2, // large error range, in inches
+                                            500, // large error range timeout, in milliseconds
+                                            20 // maximum acceleration (slew)   
+);
+
+// angular motion controller
+lemlib::ControllerSettings angularController(2, // proportional gain (kP)
+                                             0.1, // integral gain (kI)
+                                             13, // derivative gain (kD)
+                                             3, // anti windup
+                                             1, // small error range, in degrees
+                                             100, // small error range timeout, in milliseconds
+                                             3, // large error range, in degrees
+                                             500, // large error range timeout, in milliseconds
+                                             0 // maximum acceleration (slew)
+);
+
+// sensors for odometry
+lemlib::OdomSensors sensors(&vertical, // vertical tracking wheel
+                            nullptr, // vertical tracking wheel 2, set to nullptr as we don't have a second one
+                            &horizontal, // horizontal tracking wheel
+                            nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
+                            &imu // inertial sensor
+);
+
+// input curve for throttle input during driver control
+lemlib::ExpoDriveCurve throttleCurve(3, // joystick deadband out of 127
+                                     10, // minimum output where drivetrain will move out of 127
+                                     1.019 // expo curve gain
+);
+
+// input curve for steer input during driver control
+lemlib::ExpoDriveCurve steerCurve(3, // joystick deadband out of 127
+                                  10, // minimum output where drivetrain will move out of 127
+                                  1.015 // expo curve gain
+);
+
+// create the chassis
+lemlib::Chassis chassis(drivetrain, linearController, angularController, sensors, &throttleCurve, &steerCurve);
+
+/**
+ * Runs initialization code. This occurs as soon as the program is started.
+ *
+ * All other competition modes are blocked by initialize; it is recommended
+ * to keep execution time for this mode under a few seconds.
+ */
+void initialize() {
+    pros::lcd::initialize(); // initialize brain screen
+    chassis.calibrate(); // calibrate sensors
+
+    // the default rate is 50. however, if you need to change the rate, you
+    // can do the following.
+    // lemlib::bufferedStdout().setRate(...);
+    // If you use bluetooth or a wired connection, you will want to have a rate of 10ms
+
+    // for more information on how the formatting for the loggers
+    // works, refer to the fmtlib docs
+
+    // thread to for brain screen and position logging
+    // pros::Task screenTask([&]() {
+    //     while (true) {
+    //         // print robot location to the brain screen
+    //         pros::lcd::print(0, "X: %f", chassis.getPose().x); // x
+    //         pros::lcd::print(1, "Y: %f", chassis.getPose().y); // y
+    //         pros::lcd::print(2, "Theta: %f", chassis.getPose().theta); // heading
+    //         // log position telemetry
+    //         lemlib::telemetrySink()->info("Chassis pose: {}", chassis.getPose());
+    //         // delay to save resources
+    //         pros::delay(50);
+    //     }
+    // });
+}
+
+/**
+ * Runs while the robot is disabled
+ */
+void disabled() {}
+
+/**
+ * runs after initialize if the robot is connected to field control
+ */
+void competition_initialize() {}
+
+// get a path used for pure pursuit
+// this needs to be put outside a function
+
+/**
+ * Runs during auto
+ *
+ * This is an example autonomous routine which demonstrates a lot of the features LemLib has to offer
+ */
+
+void intake(){
+    while(true){
+        if (controller.get_digital(DIGITAL_R1)){
+            //hoard
+            bottomRoller.move(120);
+            midRoller.move_velocity(160);
+            //midRoller.move(120);
+            topRoller.move(40);
+            
+        } else if (controller.get_digital(DIGITAL_R2)) {
+            //score top
+            bottomRoller.move(120);
+            midRoller.move(120);
+            topRoller.move(120);
+            hood.set_value(true);
+            
+        }else if (controller.get_digital(DIGITAL_L2)){
+            //outtake/low goal
+            bottomRoller.move(-120);
+            midRoller.move(-120);
+            topRoller.move(-120);
+            intakeLift.set_value(true);
+        }else if (controller.get_digital(DIGITAL_L1)){
+            //score middle  
+            bottomRoller.move(-120);
+            midRoller.move(-120);
+            topRoller.move(-120);
+            pros::delay(100);
+            while(controller.get_digital(DIGITAL_L1)){
+                bottomRoller.move(120);
+                midRoller.move(120);
+                topRoller.move(-120);
+                hood.set_value(true);
+            }
+            
+        }else{
+            topRoller.move(0);
+            midRoller.move(0);
+            bottomRoller.move(0);
+            intakeLift.set_value(false);
+            hood.set_value(false);
+        }
+
+        
+    }
+
+     
+}
+
+void left6p3(){
+    chassis.setPose(48.3, -9, 253);
+    
+    chassis.moveToPoint(21.6, -25, 1000, {.maxSpeed=120});
+    //intake on
+    bottomRoller.move(120);
+    midRoller.move(120);
+    topRoller.move(30);
+    //pros::delay(500);
+    //matchload.set_value(true);
+
+    //going to under goal blocks
+    chassis.moveToPoint(9, -37, 800);
+    matchload.set_value(false);
+    chassis.moveToPose(7, -46.2, 188, 800);
+    pros::delay(500);
+    matchload.set_value(true);
+
+    //go score long
+    chassis.moveToPose(31, -32, 270,1500, {.forwards=false, .minSpeed=50});
+    chassis.moveToPoint(36, -43, 2300, {.forwards=false, .minSpeed=30});
+    chassis.turnToHeading(90, 800);
+    pros::delay(850);
+    chassis.tank(-100, -100);
+
+    pros::delay(500);
+    topRoller.move(120);
+    hood.set_value(true);
+    pros::delay(1800);
+    chassis.setPose(20, -45.2, 90);
+
+
+    //matchload
+    //chassis.tank(0,0);
+    // chassis.tank(100, 100); //go forwaards dumbasss
+    // pros::delay(1100);
+
+    chassis.moveToPoint(45, -45.2, 1000, {.minSpeed=40});
+
+    //chassis.moveToPoint(40, -45.2, 1000, {.forwards=true});
+    
+    hood.set_value(false);
+    pros::delay(1000);
+    chassis.tank(60, 60);
+    pros::delay(300);
+    chassis.tank(0, 0);
+    chassis.moveToPoint(39, -40, 1000, {.forwards=false, .minSpeed=45});
+    chassis.turnToHeading(135, 300, {.minSpeed=40});
+    chassis.moveToPose(10, -12,135,2000, {.forwards=false, .minSpeed=55});
+    //chassis.turnToHeading(135, 1000);
+    pros::delay(900);
+    topRoller.move(-120);
+    midRoller.move(-120);
+    bottomRoller.move(-120); 
+    pros::delay(200);
+
+    hood.set_value(true);
+    midRoller.move(120);
+    bottomRoller.move(120);
+    matchload.set_value(false);
+    pros::delay(900);
+
+    //wing
+    chassis.moveToPoint(25, -31, 1100);
+    chassis.turnToHeading(80, 700);
+    chassis.moveToPoint(10, -34.5, 2500, {.forwards=false, .minSpeed=80});
+    chassis.turnToHeading(90, 1000);
+    
+}
+
+void left7(){
+    chassis.setPose(48.3, -9, 253);
+    
+    chassis.moveToPoint(21.6, -25, 1200, {.maxSpeed=100});
+    //intake on
+    bottomRoller.move(120);
+    midRoller.move(120);
+    topRoller.move(30);
+
+    chassis.moveToPoint(36, -42.9, 2300, {.forwards=false, .minSpeed=30});
+    chassis.turnToHeading(90, 800);
+
+    //matchload
+    //chassis.tank(0,0);
+    pros::delay(800);
+    chassis.tank(100, 100); //go forwaards dumbasss
+    matchload.set_value(true);
+    pros::delay(1300);
+    //chassis.moveToPoint(40, -45.2, 1000, {.forwards=true});
+    hood.set_value(false);
+    chassis.tank(60, 60);
+    pros::delay(500);
+    chassis.tank(0, 0);
+
+    chassis.tank(-100, -100);
+    pros::delay(800);
+    hood.set_value(true);
+    chassis.tank(-10, -10);
+    pros::delay(600);
+    //wing?
+}
+
+void right6p3(){
+    chassis.setPose(50.6, 16, 280);
+    chassis.moveToPoint(21, 21, 1200, {.minSpeed=35});
+    bottomRoller.move(120);
+    midRoller.move(120);
+    topRoller.move(30);
+    pros::delay(500);
+    matchload.set_value(true);
+
+    //going to under goal blocks
+    // chassis.moveToPoint(9, 37, 800);
+    // matchload.set_value(false);
+    // chassis.moveToPose(6, 45, 352, 800);
+    // pros::delay(500);
+    // matchload.set_value(true);
+
+    //go score long
+    //chassis.moveToPose(31, 31, 90,1500, {.forwards=false, .minSpeed=40});
+    chassis.moveToPoint(36, 44.5, 2300, {.forwards=false, .minSpeed=5});
+    chassis.turnToHeading(90, 800);
+    pros::delay(800);
+    chassis.tank(-100, -100);
+
+    pros::delay(500);
+    topRoller.move(120);
+    hood.set_value(true);
+    pros::delay(1400);
+    chassis.setPose(20, 45.2, 90);
+    matchload.set_value(true);
+
+    //matchload
+    //chassis.tank(0,0);
+    // chassis.tank(90, 90); //go forwaards dumbasss
+    // pros::delay(1000);
+    // //chassis.moveToPoint(40, -45.2, 1000, {.forwards=true});
+    // hood.set_value(false);
+    // chassis.tank(60, 60);
+    // pros::delay(600);
+    // chassis.tank(0, 0);
+
+    hood.set_value(false);
+    chassis.moveToPoint(52, 45.2, 2000);
+    chassis.moveToPoint(39, 40, 1500, {.forwards=false, .minSpeed=80});
+    matchload.set_value(false);
+    chassis.turnToPoint(3, 14, 800);
+    chassis.moveToPose(3, 14,210, 2500, {.minSpeed=70});
+
+    
+    intakeLift.set_value(true);
+    pros::delay(500);
+    bottomRoller.move(-120);
+    midRoller.move(-120);
+    topRoller.move(-120);
+    pros::delay(2500);
+
+    chassis.moveToPoint(18, 25, 1100, {.forwards=false, .minSpeed=40});
+    chassis.turnToHeading(280, 800);
+    chassis.moveToPoint(10.6, 37, 1500, {.minSpeed=50});
+}
+
+void left9anti(){
+    chassis.setPose(48.3, -9, 253);
+    
+    chassis.moveToPoint(21.6, -25, 800, {.maxSpeed=100});
+    //intake on
+    bottomRoller.move(120);
+    midRoller.move(120);
+    topRoller.move(30);
+    //pros::delay(500);
+    //matchload.set_value(true);
+
+    //going to under goal blocks
+    chassis.moveToPoint(10, -37, 700);
+    matchload.set_value(false);
+    chassis.moveToPose(8, -45.5, 188, 800);
+    pros::delay(500);
+    matchload.set_value(true);
+
+    //matchload
+    chassis.moveToPose(31, -32, 270,1500, {.forwards=false, .minSpeed=50});
+    chassis.moveToPoint(36, -45.2, 2300, {.forwards=false, .minSpeed=30});
+    chassis.turnToHeading(90, 700);
+    pros::delay(700);
+    chassis.moveToPoint(60, chassis.getPose().y, 1200, {.minSpeed=40});
+
+    //go mid
+    chassis.moveToPoint(37, -32, 1500, {.forwards=false, .minSpeed=30});
+    chassis.turnToHeading(135, 600);
+    chassis.moveToPoint(15, -12, 1500, {.forwards=false});
+    pros::delay(500);
+    topRoller.move(-120);
+    midRoller.move(-120);
+    bottomRoller.move(-120); 
+    pros::delay(200);
+    hood.set_value(true);
+    midRoller.move(120);
+    bottomRoller.move(120);
+    pros::delay(700);
+    topRoller.move(120);
+    pros::delay(50);
+    hood.set_value(false);
+
+
+    //wing out
+    wing.set_value(true);
+    matchload.set_value(false);
+
+    chassis.moveToPoint(30, -37, 1500, {.minSpeed=30});
+    chassis.turnToHeading(85, 600);
+    chassis.moveToPoint(11, -40, 1000, {.forwards=false, .minSpeed=60});
+    chassis.moveToPoint(43, -40, 900, {.minSpeed=90});
+    wing.set_value(false);
+    // chassis.moveToPoint(12, -33.6, 1300);
+    // chassis.moveToPose(9, -46.6,110, 1300);
+    //chassis.turnToHeading(120, 600);
+    // chassis.moveToPoint(32, -46, 1500, {.minSpeed=120});
+    // pros::delay(200);
+    // wing.set_value(false);
+
+    chassis.turnToPoint(25, -50.2,  800, {.forwards=false, .minSpeed=50});
+    chassis.moveToPoint(15, -47.2, 2300, {.forwards=false, .minSpeed=30});
+    pros::delay(500);
+    hood.set_value(true);    
+}
+
+void skills(){
+    chassis.setPose(-52.6, -8.6, 120);
+    //mid pile
+    chassis.moveToPoint(-28, -24, 1800);
+    wing.set_value(true);
+    bottomRoller.move(120);
+    midRoller.move(120);
+    topRoller.move(120);
+    pros::delay(500);
+    matchload.set_value(true);
+    pros::delay(300);
+    matchload.set_value(false);
+    pros::delay(200);
+
+    chassis.turnToHeading(225, 900);
+    chassis.moveToPoint(-46, -42, 2000, {.maxSpeed=70});
+
+    //face long goal
+    chassis.swingToHeading(270, lemlib::DriveSide::RIGHT, 1500, {.minSpeed=40});
+    matchload.set_value(true);
+    pros::delay(1100);
+    chassis.tank(-100, -100);
+    pros::delay(500);
+    hood.set_value(true);
+    chassis.tank(-30, -30);
+    pros::delay(1100);
+    chassis.tank(0, 0);
+    pros::delay(250);
+    hood.set_value(false);
+    
+    //matchload
+    chassis.setPose(-27.5, -45, 270);
+    chassis.moveToPoint(-48, -45, 1200, {.minSpeed=40});
+    pros::delay(1200);
+    chassis.tank(30, 30);
+    pros::delay(1000);
+
+    //go to other side of long goal
+    //face tunnel
+    chassis.moveToPoint(-45, -47, 1500, {.forwards=false});
+    chassis.turnToHeading(305, 500); 
+    chassis.moveToPoint(-37, -57, 1500, {.forwards=false});
+    chassis.turnToHeading(270, 500);
+    matchload.set_value(false);
+
+    chassis.moveToPoint(35, -57, 1500, {.forwards=false});
+
+
+    chassis.moveToPoint(45, -45, 1500, {.forwards=false, .maxSpeed=85});
+    chassis.turnToHeading(90, 1000);
+    pros::delay(1000);
+    chassis.tank(-100, -100);
+    pros::delay(500);
+    hood.set_value(true);
+    chassis.tank(-30, -30);
+    pros::delay(1100);
+    chassis.tank(0, 0);
+
+
+}
+void autonomous() {
+    left6p3();
+}
+
+/**
+ * Runs in driver control
+ */
+void opcontrol() {
+    // controller
+    // loop to continuously update motors
+    topRoller.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+    pros::Task intakeTask(intake);
+    bool wingToggle = false, matchloadToggle = false;
+
+    while (true) {
+        // get joystick positions
+        int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+        int rightY = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y);
+        int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+        if (controller.get_digital_new_press(DIGITAL_Y)){
+            //wing
+            wingToggle = !wingToggle;
+            wing.set_value(wingToggle);
+        }
+        if (controller.get_digital_new_press(DIGITAL_RIGHT)){
+            //matchload
+            matchloadToggle = !matchloadToggle;
+            matchload.set_value(matchloadToggle);
+        }
+        
+        //chassis.tank(leftY, rightY);
+        if (controller.get_digital_new_press(DIGITAL_A)){
+            chassis.setPose(0,0,0);
+            chassis.tank(-115, 125);
+            pros::delay(400);
+            chassis.turnToHeading(345, 300, {.minSpeed=110});
+            std::cout<< chassis.getPose().theta;
+            // chassis.tank(120, -120);
+            // pros::delay(250);
+        }
+        
+        chassis.arcade(leftY, rightX);
+        // delay to save resources
+        pros::delay(50);
+    }
+}
