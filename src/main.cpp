@@ -144,28 +144,6 @@ void disabled() {}
 
 	}
 
-	/**
-		* Runs during auto
-		* 2 distance sensors (depends on which pair is on the y axis)
-		* to reset only ODOM X coordinate during auton for consistency
-		* e.g. if the robot is at around 90 degrees the 2 horizontal sensors looking at the y axis
-		can be used to reset the ODOM X coordinate
-		*/
-	void only_x_two_sensor_dsr(){
-
-	}
-
-	/**
-		* Runs during auto
-		* 2 distance sensors (depends on which pair is on the x axis)
-		* to reset only ODOM Y coordinate during auton for consistency
-		* e.g. if the robot is at around 90 degrees the 2 horizontal sensors looking at the x axis
-		can be used to reset the ODOM Y coordinate
-		*/
-	void only_y_two_sensor_dsr(){
-
-	}
-
 //robot functions driver and auton end
 
 /**
