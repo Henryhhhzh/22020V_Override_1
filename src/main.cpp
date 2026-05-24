@@ -119,6 +119,55 @@ void initialize() {
  */
 void disabled() {}
 
+//robot functions driver and auton
+
+//DISTANCE SENSOR RESET FUNCTIONS (priotrity use the top one that is available, if not use the next one down, etc.)
+
+	/**
+		* Runs during auto
+		* 3 sensor Distance Sensor Reset
+		* to reset ODOM coordinates during auton for consistency
+		* e.g. if the robot is at around 90 degrees the 2 horizontal sensors looking at the y axis
+		can be used to reset the ODOM X coordinate and the vertical sensor looking at the x axis can be used to reset the ODOM Y coordinate
+		* if available use this but rare
+		*/
+	void three_sensor_dsr(){
+
+	}
+
+	/**
+		* Runs during auto
+		* one vertical and one horizontal sensor Distance Sensor Reset
+		* to reset ODOM coordinates during auton for consistency
+		*/
+	void two_sensor_dsr(){
+
+	}
+
+	/**
+		* Runs during auto
+		* 2 distance sensors (depends on which pair is on the y axis)
+		* to reset only ODOM X coordinate during auton for consistency
+		* e.g. if the robot is at around 90 degrees the 2 horizontal sensors looking at the y axis
+		can be used to reset the ODOM X coordinate
+		*/
+	void only_x_two_sensor_dsr(){
+
+	}
+
+	/**
+		* Runs during auto
+		* 2 distance sensors (depends on which pair is on the x axis)
+		* to reset only ODOM Y coordinate during auton for consistency
+		* e.g. if the robot is at around 90 degrees the 2 horizontal sensors looking at the x axis
+		can be used to reset the ODOM Y coordinate
+		*/
+	void only_y_two_sensor_dsr(){
+
+	}
+
+//robot functions driver and auton end
+
 /**
  * Runs after initialize(), and before autonomous when connected to the Field
  * Management System or the VEX Competition Switch. This is intended for
@@ -131,6 +180,21 @@ void disabled() {}
 void competition_initialize() {}
 
 /**
+ * all different autons will be here
+ * put the autons you want to run in the autonomous function at the bottom
+ */
+
+	void example_auton() {
+	//auton example there should be many of these
+
+	}
+
+	void example_auton2() {
+
+	}
+
+/**
+ * THE AUTON YOU WANT TO RUN GOES IN THE AUTONOMOUS FUNCTION AT THE BOTTOM
  * Runs the user autonomous code. This function will be started in its own task
  * with the default priority and stack size whenever the robot is enabled via
  * the Field Management System or the VEX Competition Switch in the autonomous
@@ -141,20 +205,11 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-
-void example_auton() {
-//auton example there should be many of these
-
-}
-
-void example_auton2() {
-
-}
-
 void autonomous() {
 	example_auton();
     //the auton you want to run
 }
+
 /**
  * Runs the operator control code. This function will be started in its own task
  * with the default priority and stack size whenever the robot is enabled via
