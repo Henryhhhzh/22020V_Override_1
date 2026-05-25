@@ -6,8 +6,31 @@ pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
 // motor groups
 pros::MotorGroup rightMotors({1, 7, 15},
-                            pros::MotorGearset::blue); // left motor group - ports 3 (reversed), 4, 5 (reversed)
+	                            pros::MotorGearset::blue); // left motor group - ports 3 (reversed), 4, 5 (reversed)
 pros::MotorGroup leftMotors({-3, -4, -5}, pros::MotorGearset::blue); // right motor group - ports 6, 7, 9 (reversed)
+
+enum class RobotDsrSensor {
+	top,
+	right,
+	bottom,
+	left
+};
+
+enum class DsrWall {
+	top,
+	right,
+	bottom,
+	left
+};
+
+struct DsrSensorConfig {
+	float heading_offset; // direction the sensor points compared to robot front, in degrees
+	float x_offset; // sensor-local forward offset from tracking point to sensor lens, in inches
+	float y_offset; // sensor-local right-side offset from tracking point to sensor lens, in inches
+
+	DsrSensorConfig(float heading_offset, float x_offset, float y_offset)
+	    : heading_offset(heading_offset), x_offset(x_offset), y_offset(y_offset) {}
+};
 
 // individual motors and pistons
 //motrs and pistons here
@@ -77,8 +100,49 @@ lemlib::ExpoDriveCurve throttleCurve(3, // joystick deadband out of 127
 
 // input curve for steer input during driver control
 lemlib::ExpoDriveCurve steerCurve(3, // joystick deadband out of 127
-                                  10, // minimum output where drivetrain will move out of 127
-                                  1.015 // expo curve gain
+	                                  10, // minimum output where drivetrain will move out of 127
+	                                  1.015 // expo curve gain
+);
+
+// DSR wall locations
+constexpr float dsrTopWallY = 72.0; // top wall Y coordinate, in inches
+constexpr float dsrRightWallX = 72.0; // right wall X coordinate, in inches
+constexpr float dsrBottomWallY = -72.0; // bottom wall Y coordinate, in inches
+constexpr float dsrLeftWallX = -72.0; // left wall X coordinate, in inches
+
+// DSR reading limits
+constexpr float dsrMinValidDistance = 0.5; // minimum valid distance sensor reading, in inches
+constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor reading, in inches
+
+// DSR sensor offsets are measured from the tracking point to the distance sensor lens.
+// These are sensor-local offsets, so they are different for each physical sensor:
+// x_offset = forward/back along the direction that sensor points. Positive is outward.
+// y_offset = side offset to that sensor's right. Negative is to that sensor's left.
+// Example: top sensor 5" in front of tracking point and 1" to robot right -> (0, 5, 1).
+// Example: right sensor 4" to robot right and 0.5" toward robot front -> (90, 4, -0.5).
+// THE CORDS ARE NOT THE UNIVERSAL PLANE BUT CENTERERED ON THE SENSOR IN QUESTION
+// DSR top physical sensor settings
+DsrSensorConfig dsrTopSensor(0, // heading offset from robot front, in degrees
+	                             0, // x_offset: positive toward robot front/top, in inches
+	                             0 // y_offset: positive toward robot right, in inches
+);
+
+// DSR right physical sensor settings
+DsrSensorConfig dsrRightSensor(90, // heading offset from robot front, in degrees
+	                               0, // x_offset: positive toward robot right, in inches
+	                               0 // y_offset: positive toward robot back/bottom, in inches
+);
+
+// DSR bottom physical sensor settings
+DsrSensorConfig dsrBottomSensor(180, // heading offset from robot front, in degrees
+	                                0, // x_offset: positive toward robot back/bottom, in inches
+	                                0 // y_offset: positive toward robot left, in inches
+);
+
+// DSR left physical sensor settings
+DsrSensorConfig dsrLeftSensor(270, // heading offset from robot front, in degrees
+	                              0, // x_offset: positive toward robot left, in inches
+	                              0 // y_offset: positive toward robot front/top, in inches
 );
 
 // create the chassis
@@ -124,33 +188,6 @@ void disabled() {}
 
 //DISTANCE SENSOR RESET FUNCTIONS (priotrity use the top one that is available, if not use the next one down, etc.)
 
-	enum class RobotDsrSensor {
-		top,
-		right,
-		bottom,
-		left
-	};
-
-	enum class DsrWall {
-		top,
-		right,
-		bottom,
-		left
-	};
-
-	struct DsrSensorConfig {
-		float heading_offset;
-		float x_offset;
-		float y_offset;
-	};
-
-	constexpr float DSR_TOP_WALL_Y = 72.0;
-	constexpr float DSR_RIGHT_WALL_X = 72.0;
-	constexpr float DSR_BOTTOM_WALL_Y = -72.0;
-	constexpr float DSR_LEFT_WALL_X = -72.0;
-	constexpr float DSR_MIN_VALID_DISTANCE = 0.5;
-	constexpr float DSR_MAX_VALID_DISTANCE = 100.0;
-
 	float dsr_deg_to_rad(float degrees) {
 		return degrees * 3.1415926535 / 180.0;
 	}
@@ -158,13 +195,13 @@ void disabled() {}
 	DsrSensorConfig dsr_get_sensor_config(RobotDsrSensor sensor) {
 		switch (sensor) {
 			case RobotDsrSensor::top:
-				return {0, 0, 0};
+				return dsrTopSensor;
 			case RobotDsrSensor::right:
-				return {90, 0, 0};
+				return dsrRightSensor;
 			case RobotDsrSensor::bottom:
-				return {180, 0, 0};
+				return dsrBottomSensor;
 			case RobotDsrSensor::left:
-				return {270, 0, 0};
+				return dsrLeftSensor;
 		}
 
 		return {0, 0, 0};
@@ -193,7 +230,7 @@ void disabled() {}
 
 	float dsr_tracking_point_distance_to_wall(RobotDsrSensor sensor, DsrWall wall, float heading) {
 		float sensor_distance = dsr_read_sensor_inches(sensor);
-		if (sensor_distance < DSR_MIN_VALID_DISTANCE || sensor_distance > DSR_MAX_VALID_DISTANCE) {
+		if (sensor_distance < dsrMinValidDistance || sensor_distance > dsrMaxValidDistance) {
 			return -1;
 		}
 
@@ -215,19 +252,19 @@ void disabled() {}
 
 		switch (wall) {
 			case DsrWall::top:
-				y_sum += DSR_TOP_WALL_Y - distance_to_wall;
+				y_sum += dsrTopWallY - distance_to_wall;
 				y_count++;
 				break;
 			case DsrWall::bottom:
-				y_sum += DSR_BOTTOM_WALL_Y + distance_to_wall;
+				y_sum += dsrBottomWallY + distance_to_wall;
 				y_count++;
 				break;
 			case DsrWall::right:
-				x_sum += DSR_RIGHT_WALL_X - distance_to_wall;
+				x_sum += dsrRightWallX - distance_to_wall;
 				x_count++;
 				break;
 			case DsrWall::left:
-				x_sum += DSR_LEFT_WALL_X + distance_to_wall;
+				x_sum += dsrLeftWallX + distance_to_wall;
 				x_count++;
 				break;
 		}
