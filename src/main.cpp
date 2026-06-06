@@ -10,9 +10,9 @@ pros::MotorGroup rightMotors({1, 7, 15},
 pros::MotorGroup leftMotors({-3, -4, -5}, pros::MotorGearset::blue); // right motor group - ports 6, 7, 9 (reversed)
 
 enum class RobotDsrSensor {
-	top,
+	front,
 	right,
-	bottom,
+	back,
 	left
 };
 
@@ -118,31 +118,31 @@ constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor re
 // These are sensor-local offsets, so they are different for each physical sensor:
 // x_offset = forward/back along the direction that sensor points. Positive is outward.
 // y_offset = side offset to that sensor's right. Negative is to that sensor's left.
-// Example: top sensor 5" in front of tracking point and 1" to robot right -> (0, 5, 1).
+// Example: front sensor 5" in front of tracking point and 1" to robot right -> (0, 5, 1).
 // Example: right sensor 4" to robot right and 0.5" toward robot front -> (90, 4, -0.5).
-// THE CORDS ARE NOT THE UNIVERSAL PLANE BUT CENTERERED ON THE SENSOR IN QUESTION
-// DSR top physical sensor settings
-DsrSensorConfig dsrTopSensor(0, // heading offset from robot front, in degrees
-	                             0, // x_offset: positive toward robot front/top, in inches
-	                             0 // y_offset: positive toward robot right, in inches
+// These offset coordinates are sensor-local, not field-global.
+// DSR front physical sensor settings
+DsrSensorConfig dsrFrontSensor(0, // heading offset from robot front, in degrees
+	                               0, // x_offset: positive toward robot front, in inches
+	                               0 // y_offset: positive toward robot right, in inches
 );
 
 // DSR right physical sensor settings
 DsrSensorConfig dsrRightSensor(90, // heading offset from robot front, in degrees
 	                               0, // x_offset: positive toward robot right, in inches
-	                               0 // y_offset: positive toward robot back/bottom, in inches
+	                               0 // y_offset: positive toward robot back, in inches
 );
 
-// DSR bottom physical sensor settings
-DsrSensorConfig dsrBottomSensor(180, // heading offset from robot front, in degrees
-	                                0, // x_offset: positive toward robot back/bottom, in inches
-	                                0 // y_offset: positive toward robot left, in inches
+// DSR back physical sensor settings
+DsrSensorConfig dsrBackSensor(180, // heading offset from robot front, in degrees
+	                              0, // x_offset: positive toward robot back, in inches
+	                              0 // y_offset: positive toward robot left, in inches
 );
 
 // DSR left physical sensor settings
 DsrSensorConfig dsrLeftSensor(270, // heading offset from robot front, in degrees
 	                              0, // x_offset: positive toward robot left, in inches
-	                              0 // y_offset: positive toward robot front/top, in inches
+	                              0 // y_offset: positive toward robot front, in inches
 );
 
 // create the chassis
@@ -186,155 +186,149 @@ void disabled() {}
 
 //robot functions driver and auton
 
-//DISTANCE SENSOR RESET FUNCTIONS (priotrity use the top one that is available, if not use the next one down, etc.)
+//DISTANCE SENSOR RESET FUNCTIONS
 
-	float dsr_deg_to_rad(float degrees) {
-		return degrees * 3.1415926535 / 180.0;
+float dsr_deg_to_rad(float degrees) {
+	return degrees * 3.1415926535 / 180.0;
+}
+
+float dsr_normalize_heading(float heading) {
+	while (heading < 0) heading += 360;
+	while (heading >= 360) heading -= 360;
+	return heading;
+}
+
+DsrSensorConfig dsr_get_sensor_config(RobotDsrSensor sensor) {
+	switch (sensor) {
+		case RobotDsrSensor::front:
+			return dsrFrontSensor;
+		case RobotDsrSensor::right:
+			return dsrRightSensor;
+		case RobotDsrSensor::back:
+			return dsrBackSensor;
+		case RobotDsrSensor::left:
+			return dsrLeftSensor;
 	}
 
-	DsrSensorConfig dsr_get_sensor_config(RobotDsrSensor sensor) {
-		switch (sensor) {
-			case RobotDsrSensor::top:
-				return dsrTopSensor;
-			case RobotDsrSensor::right:
-				return dsrRightSensor;
-			case RobotDsrSensor::bottom:
-				return dsrBottomSensor;
-			case RobotDsrSensor::left:
-				return dsrLeftSensor;
-		}
+	return {0, 0, 0};
+}
 
-		return {0, 0, 0};
+float dsr_read_sensor_inches(RobotDsrSensor sensor) {
+	// TODO: return the selected physical distance sensor's reading in inches.
+	(void)sensor;
+	return -1;
+}
+
+float dsr_wall_angle(DsrWall wall) {
+	switch (wall) {
+		case DsrWall::top:
+			return 0;
+		case DsrWall::right:
+			return 90;
+		case DsrWall::bottom:
+			return 180;
+		case DsrWall::left:
+			return 270;
 	}
 
-	float dsr_read_sensor_inches(RobotDsrSensor sensor) {
-		// TODO: return the selected physical distance sensor's reading in inches.
-		(void)sensor;
+	return 0;
+}
+
+DsrWall dsr_nearest_wall_for_sensor(RobotDsrSensor sensor, float heading) {
+	DsrSensorConfig config = dsr_get_sensor_config(sensor);
+	float sensor_heading = dsr_normalize_heading(heading + config.heading_offset);
+
+	if (sensor_heading >= 315 || sensor_heading < 45) {
+		return DsrWall::top;
+	} else if (sensor_heading < 135) {
+		return DsrWall::right;
+	} else if (sensor_heading < 225) {
+		return DsrWall::bottom;
+	}
+
+	return DsrWall::left;
+}
+
+float dsr_tracking_point_distance_to_wall(RobotDsrSensor sensor, DsrWall wall, float heading) {
+	float sensor_distance = dsr_read_sensor_inches(sensor);
+	if (sensor_distance < dsrMinValidDistance || sensor_distance > dsrMaxValidDistance) {
 		return -1;
 	}
 
-	float dsr_wall_angle(DsrWall wall) {
-		switch (wall) {
-			case DsrWall::top:
-				return 0;
-			case DsrWall::right:
-				return 90;
-			case DsrWall::bottom:
-				return 180;
-			case DsrWall::left:
-				return 270;
-		}
+	DsrSensorConfig config = dsr_get_sensor_config(sensor);
+	float theta = dsr_deg_to_rad((heading + config.heading_offset) - dsr_wall_angle(wall));
+	float blue = std::cos(theta) * sensor_distance;
+	float purple = std::cos(theta) * config.x_offset;
+	float green = std::sin(theta) * config.y_offset * -1;
 
-		return 0;
+	return blue + purple + green;
+}
+
+void dsr_add_coordinate_sample(float& x_sum, int& x_count, float& y_sum, int& y_count,
+                               RobotDsrSensor sensor, DsrWall wall, float heading) {
+	float distance_to_wall = dsr_tracking_point_distance_to_wall(sensor, wall, heading);
+	if (distance_to_wall < 0) {
+		return;
 	}
 
-	float dsr_tracking_point_distance_to_wall(RobotDsrSensor sensor, DsrWall wall, float heading) {
-		float sensor_distance = dsr_read_sensor_inches(sensor);
-		if (sensor_distance < dsrMinValidDistance || sensor_distance > dsrMaxValidDistance) {
-			return -1;
-		}
+	switch (wall) {
+		case DsrWall::top:
+			y_sum += dsrTopWallY - distance_to_wall;
+			y_count++;
+			break;
+		case DsrWall::bottom:
+			y_sum += dsrBottomWallY + distance_to_wall;
+			y_count++;
+			break;
+		case DsrWall::right:
+			x_sum += dsrRightWallX - distance_to_wall;
+			x_count++;
+			break;
+		case DsrWall::left:
+			x_sum += dsrLeftWallX + distance_to_wall;
+			x_count++;
+			break;
+	}
+}
 
-		DsrSensorConfig config = dsr_get_sensor_config(sensor);
-		float theta = dsr_deg_to_rad((heading + config.heading_offset) - dsr_wall_angle(wall));
-		float blue = std::cos(theta) * sensor_distance;
-		float purple = std::cos(theta) * config.x_offset;
-		float green = std::sin(theta) * config.y_offset * -1;
+void dsr_add_sensor_coordinate_sample(float& x_sum, int& x_count, float& y_sum, int& y_count,
+                                      RobotDsrSensor sensor, float heading) {
+	DsrWall wall = dsr_nearest_wall_for_sensor(sensor, heading);
+	dsr_add_coordinate_sample(x_sum, x_count, y_sum, y_count, sensor, wall, heading);
+}
 
-		return blue + purple + green;
+/**
+ * Runs during auto to reset odom with any combination of physical distance sensors.
+ * Argument order: front, right, back, left.
+ */
+void dsr(bool use_front_sensor, bool use_right_sensor, bool use_back_sensor, bool use_left_sensor) {
+	lemlib::Pose pose = chassis.getPose();
+	float heading = dsr_normalize_heading(pose.theta);
+
+	float x_sum = 0;
+	float y_sum = 0;
+	int x_count = 0;
+	int y_count = 0;
+
+	if (use_front_sensor) {
+		dsr_add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, RobotDsrSensor::front, heading);
+	}
+	if (use_right_sensor) {
+		dsr_add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, RobotDsrSensor::right, heading);
+	}
+	if (use_back_sensor) {
+		dsr_add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, RobotDsrSensor::back, heading);
+	}
+	if (use_left_sensor) {
+		dsr_add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, RobotDsrSensor::left, heading);
 	}
 
-	void dsr_add_coordinate_sample(float& x_sum, int& x_count, float& y_sum, int& y_count,
-	                               RobotDsrSensor sensor, DsrWall wall, float heading) {
-		float distance_to_wall = dsr_tracking_point_distance_to_wall(sensor, wall, heading);
-		if (distance_to_wall < 0) {
-			return;
-		}
-
-		switch (wall) {
-			case DsrWall::top:
-				y_sum += dsrTopWallY - distance_to_wall;
-				y_count++;
-				break;
-			case DsrWall::bottom:
-				y_sum += dsrBottomWallY + distance_to_wall;
-				y_count++;
-				break;
-			case DsrWall::right:
-				x_sum += dsrRightWallX - distance_to_wall;
-				x_count++;
-				break;
-			case DsrWall::left:
-				x_sum += dsrLeftWallX + distance_to_wall;
-				x_count++;
-				break;
-		}
+	float new_x = x_count > 0 ? x_sum / x_count : pose.x;
+	float new_y = y_count > 0 ? y_sum / y_count : pose.y;
+	if (x_count > 0 || y_count > 0) {
+		chassis.setPose(new_x, new_y, pose.theta);
 	}
-
-	/**
-	 * Runs during auto to reset odom with any combination of distance sensors.
-	 * These booleans are field-facing directions, not physical sensor names.
-	 */
-	void dsr(bool top_facing, bool left_facing, bool right_facing, bool bottom_facing){
-		lemlib::Pose pose = chassis.getPose();
-		float heading = pose.theta;
-		RobotDsrSensor top_facing_sensor = RobotDsrSensor::top;
-		RobotDsrSensor right_facing_sensor = RobotDsrSensor::right;
-		RobotDsrSensor bottom_facing_sensor = RobotDsrSensor::bottom;
-		RobotDsrSensor left_facing_sensor = RobotDsrSensor::left;
-
-		while (heading < 0) heading += 360;
-		while (heading >= 360) heading -= 360;
-
-		if (heading >= 315.5 || heading < 45.5) {
-			// Nearest field direction: top / heading 1
-			top_facing_sensor = RobotDsrSensor::top;
-			right_facing_sensor = RobotDsrSensor::right;
-			bottom_facing_sensor = RobotDsrSensor::bottom;
-			left_facing_sensor = RobotDsrSensor::left;
-		} else if (heading < 135) {
-			// Nearest field direction: right / heading 90
-			top_facing_sensor = RobotDsrSensor::left;
-			right_facing_sensor = RobotDsrSensor::top;
-			bottom_facing_sensor = RobotDsrSensor::right;
-			left_facing_sensor = RobotDsrSensor::bottom;
-		} else if (heading < 225) {
-			// Nearest field direction: bottom / heading 180
-			top_facing_sensor = RobotDsrSensor::bottom;
-			right_facing_sensor = RobotDsrSensor::left;
-			bottom_facing_sensor = RobotDsrSensor::top;
-			left_facing_sensor = RobotDsrSensor::right;
-		} else {
-			// Nearest field direction: left / heading 270
-			top_facing_sensor = RobotDsrSensor::right;
-			right_facing_sensor = RobotDsrSensor::bottom;
-			bottom_facing_sensor = RobotDsrSensor::left;
-			left_facing_sensor = RobotDsrSensor::top;
-		}
-
-		float x_sum = 0;
-		float y_sum = 0;
-		int x_count = 0;
-		int y_count = 0;
-
-		if (top_facing) {
-			dsr_add_coordinate_sample(x_sum, x_count, y_sum, y_count, top_facing_sensor, DsrWall::top, heading);
-		}
-		if (bottom_facing) {
-			dsr_add_coordinate_sample(x_sum, x_count, y_sum, y_count, bottom_facing_sensor, DsrWall::bottom, heading);
-		}
-		if (left_facing) {
-			dsr_add_coordinate_sample(x_sum, x_count, y_sum, y_count, left_facing_sensor, DsrWall::left, heading);
-		}
-		if (right_facing) {
-			dsr_add_coordinate_sample(x_sum, x_count, y_sum, y_count, right_facing_sensor, DsrWall::right, heading);
-		}
-
-		float new_x = x_count > 0 ? x_sum / x_count : pose.x;
-		float new_y = y_count > 0 ? y_sum / y_count : pose.y;
-		if (x_count > 0 || y_count > 0) {
-			chassis.setPose(new_x, new_y, pose.theta);
-		}
-	}
+}
 
 //robot functions driver and auton end
 

@@ -3,9 +3,9 @@
 #include <iostream>
 
 enum class SensorSide {
-    top,
+    front,
     right,
-    bottom,
+    back,
     left
 };
 
@@ -17,9 +17,9 @@ enum class WallSide {
 };
 
 struct SensorReadings {
-    float top;
+    float front;
     float right;
-    float bottom;
+    float back;
     float left;
 };
 
@@ -48,11 +48,11 @@ float normalize_heading(float heading) {
 
 SensorConfig sensor_config(SensorSide sensor) {
     switch (sensor) {
-        case SensorSide::top:
+        case SensorSide::front:
             return {0, 0, 0};
         case SensorSide::right:
             return {90, 0, 0};
-        case SensorSide::bottom:
+        case SensorSide::back:
             return {180, 0, 0};
         case SensorSide::left:
             return {270, 0, 0};
@@ -63,12 +63,12 @@ SensorConfig sensor_config(SensorSide sensor) {
 
 float reading_for_sensor(SensorSide sensor, SensorReadings readings) {
     switch (sensor) {
-        case SensorSide::top:
-            return readings.top;
+        case SensorSide::front:
+            return readings.front;
         case SensorSide::right:
             return readings.right;
-        case SensorSide::bottom:
-            return readings.bottom;
+        case SensorSide::back:
+            return readings.back;
         case SensorSide::left:
             return readings.left;
     }
@@ -93,17 +93,32 @@ float wall_angle(WallSide wall) {
 
 const char* sensor_name(SensorSide sensor) {
     switch (sensor) {
-        case SensorSide::top:
-            return "robot top";
+        case SensorSide::front:
+            return "robot front";
         case SensorSide::right:
             return "robot right";
-        case SensorSide::bottom:
-            return "robot bottom";
+        case SensorSide::back:
+            return "robot back";
         case SensorSide::left:
             return "robot left";
     }
 
     return "unknown";
+}
+
+WallSide nearest_wall_for_sensor(SensorSide sensor, float heading) {
+    SensorConfig config = sensor_config(sensor);
+    float sensor_heading = normalize_heading(heading + config.heading_offset);
+
+    if (sensor_heading >= 315 || sensor_heading < 45) {
+        return WallSide::top;
+    } else if (sensor_heading < 135) {
+        return WallSide::right;
+    } else if (sensor_heading < 225) {
+        return WallSide::bottom;
+    }
+
+    return WallSide::left;
 }
 
 float distance_from_tracking_point_to_wall(SensorSide sensor, WallSide wall, float heading,
@@ -158,56 +173,28 @@ void add_coordinate_sample(float& x_sum, int& x_count, float& y_sum, int& y_coun
     }
 }
 
+void add_sensor_coordinate_sample(float& x_sum, int& x_count, float& y_sum, int& y_count,
+                                  SensorSide sensor, float heading, SensorReadings readings) {
+    WallSide wall = nearest_wall_for_sensor(sensor, heading);
+    add_coordinate_sample(x_sum, x_count, y_sum, y_count, sensor, wall, heading, readings);
+}
+
 void calculate_and_print_coords(float heading, SensorReadings readings) {
     heading = normalize_heading(heading);
 
-    SensorSide top_facing_sensor = SensorSide::top;
-    SensorSide right_facing_sensor = SensorSide::right;
-    SensorSide bottom_facing_sensor = SensorSide::bottom;
-    SensorSide left_facing_sensor = SensorSide::left;
-
-    if (heading >= 315.5 || heading < 45.5) {
-        top_facing_sensor = SensorSide::top;
-        right_facing_sensor = SensorSide::right;
-        bottom_facing_sensor = SensorSide::bottom;
-        left_facing_sensor = SensorSide::left;
-    } else if (heading < 135) {
-        top_facing_sensor = SensorSide::left;
-        right_facing_sensor = SensorSide::top;
-        bottom_facing_sensor = SensorSide::right;
-        left_facing_sensor = SensorSide::bottom;
-    } else if (heading < 225) {
-        top_facing_sensor = SensorSide::bottom;
-        right_facing_sensor = SensorSide::left;
-        bottom_facing_sensor = SensorSide::top;
-        left_facing_sensor = SensorSide::right;
-    } else {
-        top_facing_sensor = SensorSide::right;
-        right_facing_sensor = SensorSide::bottom;
-        bottom_facing_sensor = SensorSide::left;
-        left_facing_sensor = SensorSide::top;
-    }
-
     std::cout << std::fixed << std::setprecision(2);
     std::cout << "Heading: " << heading << "\n";
-    std::cout << "Top-facing sensor: " << sensor_name(top_facing_sensor) << "\n";
-    std::cout << "Right-facing sensor: " << sensor_name(right_facing_sensor) << "\n";
-    std::cout << "Bottom-facing sensor: " << sensor_name(bottom_facing_sensor) << "\n";
-    std::cout << "Left-facing sensor: " << sensor_name(left_facing_sensor) << "\n";
+    std::cout << "Using physical front/right/back/left sensors directly\n";
 
     float x_sum = 0;
     float y_sum = 0;
     int x_count = 0;
     int y_count = 0;
 
-    add_coordinate_sample(x_sum, x_count, y_sum, y_count, top_facing_sensor, WallSide::top,
-                          heading, readings);
-    add_coordinate_sample(x_sum, x_count, y_sum, y_count, bottom_facing_sensor, WallSide::bottom,
-                          heading, readings);
-    add_coordinate_sample(x_sum, x_count, y_sum, y_count, left_facing_sensor, WallSide::left,
-                          heading, readings);
-    add_coordinate_sample(x_sum, x_count, y_sum, y_count, right_facing_sensor, WallSide::right,
-                          heading, readings);
+    add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, SensorSide::front, heading, readings);
+    add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, SensorSide::right, heading, readings);
+    add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, SensorSide::back, heading, readings);
+    add_sensor_coordinate_sample(x_sum, x_count, y_sum, y_count, SensorSide::left, heading, readings);
 
     if (x_count > 0) {
         std::cout << "Final X: " << x_sum / x_count << "\n";
@@ -232,9 +219,9 @@ int main() {
         return 1;
     }
 
-    std::cout << "Enter sensor readings in inches as: top right bottom left\n";
+    std::cout << "Enter sensor readings in inches as: front right back left\n";
     std::cout << "Example: 24 18 40 30\n> ";
-    if (!(std::cin >> readings.top >> readings.right >> readings.bottom >> readings.left)) {
+    if (!(std::cin >> readings.front >> readings.right >> readings.back >> readings.left)) {
         std::cout << "Invalid readings. Type four numbers only, separated by spaces.\n";
         return 1;
     }
