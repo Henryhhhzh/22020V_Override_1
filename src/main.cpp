@@ -330,6 +330,88 @@ void dsr(bool use_front_sensor, bool use_right_sensor, bool use_back_sensor, boo
 	}
 }
 
+//RAMSETE TRAJECTORY FOLLOWER
+
+// One row of a planner-exported trajectory.
+// theta is a math-frame angle in radians: 0 = +X (field right), counter-clockwise
+// positive, exactly as the planner writes theta_rad. v is inches/second, omega is
+// radians/second. x and y are LemLib odom inches (x = right, y = forward).
+struct RamsetePoint {
+	float t; // time_s
+	float x; // x_in  (field X, right)
+	float y; // y_in  (field Y, forward)
+	float theta; // theta_rad (math frame)
+	float v; // v_ips
+	float omega; // omega_radps
+};
+
+// Ramsete tuning. b adds aggressiveness, zeta adds damping. These two are
+// convention-independent and safe to start at these values, then tune.
+constexpr float kRamseteB = 2.0;
+constexpr float kRamseteZeta = 0.7;
+
+// Robot/drivetrain constants. These must match the real robot and the values
+// used in the planner so the exported velocities are actually reachable.
+constexpr float kRamsetePi = 3.14159265358979;
+constexpr float kTrackWidthIn = 10.1; // matches the Drivetrain track width
+constexpr float kDriveWheelDiameterIn = 3.25; // NEW_325 omni
+constexpr float kDriveWheelRpm = 450.0; // wheel rpm, from the Drivetrain config
+constexpr float kMotorCartridgeRpm = 600.0; // blue cartridge
+constexpr int kRamseteLoopMs = 10; // 100 Hz control loop
+
+// LemLib pose.theta is degrees, 0 = +Y (forward), clockwise positive.
+// The planner's theta is a math angle, 0 = +X (right), counter-clockwise positive.
+// Bridge the two so position and heading error are computed in one frame.
+float ramsete_heading_to_math_rad(float heading_deg) {
+	return (kRamsetePi / 2.0) - (heading_deg * kRamsetePi / 180.0);
+}
+
+// Wrap an angle to [-pi, pi] so heading error never blows up across +-pi.
+float ramsete_normalize_angle(float radians) {
+	while (radians > kRamsetePi) radians -= 2.0 * kRamsetePi;
+	while (radians < -kRamsetePi) radians += 2.0 * kRamsetePi;
+	return radians;
+}
+
+// Linearly sample the trajectory at an arbitrary time so the control loop rate
+// is decoupled from the export dt. theta is interpolated through the shortest arc.
+RamsetePoint ramsete_sample(const RamsetePoint* traj, int count, float time_s) {
+	if (time_s <= traj[0].t) return traj[0];
+	if (time_s >= traj[count - 1].t) return traj[count - 1];
+
+	for (int i = 1; i < count; i++) {
+		if (time_s <= traj[i].t) {
+			const RamsetePoint& a = traj[i - 1];
+			const RamsetePoint& b = traj[i];
+			float span = b.t - a.t;
+			float r = span <= 0.0 ? 0.0 : (time_s - a.t) / span;
+
+			RamsetePoint out;
+			out.t = time_s;
+			out.x = a.x + (b.x - a.x) * r;
+			out.y = a.y + (b.y - a.y) * r;
+			out.theta = a.theta + ramsete_normalize_angle(b.theta - a.theta) * r;
+			out.v = a.v + (b.v - a.v) * r;
+			out.omega = a.omega + (b.omega - a.omega) * r;
+			return out;
+		}
+	}
+
+	return traj[count - 1];
+}
+
+// Convert a wheel's linear velocity (in/s) into a V5 motor velocity (cartridge
+// rpm) for move_velocity, accounting for the external gear ratio, and clamp it.
+float ramsete_wheel_ips_to_motor_rpm(float wheel_ips) {
+	float wheel_circumference = kRamsetePi * kDriveWheelDiameterIn;
+	float wheel_rpm = (wheel_ips / wheel_circumference) * 60.0;
+	float motor_rpm = wheel_rpm * (kMotorCartridgeRpm / kDriveWheelRpm);
+
+	if (motor_rpm > kMotorCartridgeRpm) motor_rpm = kMotorCartridgeRpm;
+	if (motor_rpm < -kMotorCartridgeRpm) motor_rpm = -kMotorCartridgeRpm;
+	return motor_rpm;
+}
+
 //robot functions driver and auton end
 
 /**
