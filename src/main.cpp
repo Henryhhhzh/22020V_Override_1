@@ -412,6 +412,53 @@ float ramsete_wheel_ips_to_motor_rpm(float wheel_ips) {
 	return motor_rpm;
 }
 
+// Follow a planner-exported Ramsete trajectory. Blocks until the trajectory
+// time elapses, then stops the drive. Seed odom to the path's first point first
+// (chassis.setPose(...) or a dsr() reset) so the start pose matches the path.
+void follow_ramsete(const RamsetePoint* traj, int count) {
+	if (traj == nullptr || count < 2) return;
+
+	uint32_t start_ms = pros::millis();
+
+	while (true) {
+		float t = (pros::millis() - start_ms) / 1000.0;
+		if (t >= traj[count - 1].t) break;
+
+		RamsetePoint goal = ramsete_sample(traj, count, t);
+		lemlib::Pose pose = chassis.getPose(); // x, y in inches; theta in degrees
+		float theta = ramsete_heading_to_math_rad(pose.theta);
+
+		// Position and heading error in the field frame.
+		float error_x = goal.x - pose.x;
+		float error_y = goal.y - pose.y;
+		float error_theta = ramsete_normalize_angle(goal.theta - theta);
+
+		// Rotate the position error into the robot's local frame.
+		float local_x = std::cos(theta) * error_x + std::sin(theta) * error_y;
+		float local_y = -std::sin(theta) * error_x + std::cos(theta) * error_y;
+
+		// Ramsete control law. sinc(error_theta) avoids the divide-by-zero as the
+		// heading error goes to 0.
+		float k = 2.0 * kRamseteZeta * std::sqrt(goal.omega * goal.omega + kRamseteB * goal.v * goal.v);
+		float sinc = std::fabs(error_theta) < 1e-6 ? 1.0 : std::sin(error_theta) / error_theta;
+		float v_cmd = goal.v * std::cos(error_theta) + k * local_x;
+		float omega_cmd = goal.omega + k * error_theta + kRamseteB * goal.v * sinc * local_y;
+
+		// Differential-drive split. omega is counter-clockwise positive, matching
+		// the math frame, so the right wheel speeds up on a left (CCW) turn.
+		float left_ips = v_cmd - (omega_cmd * kTrackWidthIn / 2.0);
+		float right_ips = v_cmd + (omega_cmd * kTrackWidthIn / 2.0);
+
+		leftMotors.move_velocity(static_cast<int>(ramsete_wheel_ips_to_motor_rpm(left_ips)));
+		rightMotors.move_velocity(static_cast<int>(ramsete_wheel_ips_to_motor_rpm(right_ips)));
+
+		pros::delay(kRamseteLoopMs);
+	}
+
+	leftMotors.move_velocity(0);
+	rightMotors.move_velocity(0);
+}
+
 //robot functions driver and auton end
 
 /**
