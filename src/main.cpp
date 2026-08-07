@@ -1,13 +1,13 @@
 #include "main.h"
 #include "lemlib/api.hpp" // IWYU pragma: keep
+#include <atomic>
 #include <cmath>
 
 pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
 // motor groups
-pros::MotorGroup rightMotors({1, 7, 15},
-	                            pros::MotorGearset::blue); // left motor group - ports 3 (reversed), 4, 5 (reversed)
-pros::MotorGroup leftMotors({-3, -4, -5}, pros::MotorGearset::blue); // right motor group - ports 6, 7, 9 (reversed)
+pros::MotorGroup leftMotors({1, -2, -3}, pros::MotorGearset::blue); // left drive motors, reversed
+pros::MotorGroup rightMotors({-10, 9, 8}, pros::MotorGearset::blue); // right drive motors
 
 enum class RobotDsrSensor {
 	front,
@@ -32,20 +32,36 @@ struct DsrSensorConfig {
 	    : heading_offset(heading_offset), x_offset(x_offset), y_offset(y_offset) {}
 };
 
-// individual motors and pistons
-//motrs and pistons here
-//individual motors and pistons
+// individual mechanism motors
+pros::Motor armMotor(4); // normal direction; arm sensor remains reversed
+pros::Motor cascadeMotor(-20);
+
+// Double-acting pneumatic valves on the V5 brain's three-wire ADI ports.
+// Both start retracted; extend() and retract() switch their two positions.
+pros::adi::Pneumatics VariableClaw('H', false);
+pros::adi::Pneumatics OpenClaw('F', false);
+
+// Auxiliary Rotation Sensor on port 5; not used for odometry.
+pros::Rotation armRotationSensor(-5);
+
+// The mechanism controller owns both motors continuously. Targets are stored
+// in centidegrees so changing a target is atomic on the V5 brain.
+std::atomic<std::int32_t> armTargetCentidegrees{0};
+std::atomic<std::int32_t> cascadeTargetCentidegrees{0};
+
+void mechanismPositionController();
 
 
-// Inertial Sensor on port ?
-pros::Imu imu(8);
+// Inertial sensor on placeholder port 7
+pros::Imu imu(7);
 
 
 // tracking wheels
-// horizontal tracking wheel encoder. Rotation sensor, port 20, not reversed
-pros::Rotation horizontalEnc(-13);
-// vertical tracking wheel encoder. Rotation sensor, port 11, reversed
-pros::Rotation verticalEnc(-2);
+// Tracking-wheel sensor ports are placeholders until final wiring is known.
+// Horizontal tracking wheel encoder: Rotation Sensor on port 18, reversed.
+pros::Rotation horizontalEnc(-18);
+// Vertical tracking wheel encoder: Rotation Sensor on port 19, reversed.
+pros::Rotation verticalEnc(-19);
 // horizontal tracking wheel. 2.75" diameter, 5.75" offset, back of the robot (negative)
 lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, -4.523);
 // vertical tracking wheel. 2.75" diameter, 2.5" offset, left of the robot (negative)
@@ -174,6 +190,21 @@ void initialize() {
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
 
+	// Mechanism positions use degrees and are absolute from their startup zero.
+	// Targets are not wrapped, so values such as 400 degrees remain valid.
+	cascadeMotor.set_encoder_units(pros::MotorUnits::degrees);
+	cascadeMotor.tare_position();
+	armRotationSensor.reset_position();
+	cascadeMotor.set_brake_mode(pros::MotorBrake::hold);
+	armMotor.set_brake_mode(pros::MotorBrake::hold);
+	armTargetCentidegrees.store(0);
+	cascadeTargetCentidegrees.store(0);
+
+	// This task keeps using the external arm sensor after a move has arrived, so
+	// gravity or gearbox backlash cannot turn the PID off after a fixed timeout.
+	static pros::Task mechanismControllerTask(mechanismPositionController, "Mechanism PID");
+	(void)mechanismControllerTask;
+
 	pros::lcd::register_btn1_cb(on_center_button);
 }
 
@@ -185,6 +216,262 @@ void initialize() {
 void disabled() {}
 
 //robot functions driver and auton
+
+// Show continuous mechanism positions on the handheld controller for
+// calibration without writing over the V5 brain's PROS/LLEMU interface.
+// Only one controller line is sent per update to respect its slower link.
+void displayMechanismDegrees() {
+	static std::uint32_t lastUpdateMs = 0;
+	static bool updateArmLine = true;
+	const std::uint32_t now = pros::millis();
+	if (now - lastUpdateMs < 100) return;
+	lastUpdateMs = now;
+
+	const std::int32_t armCentidegrees = armRotationSensor.get_position();
+	const double cascadeDegrees = cascadeMotor.get_position();
+
+	if (updateArmLine) {
+		if (armCentidegrees == PROS_ERR) {
+			controller.print(0, 0, "Arm: ERROR     ");
+		} else {
+			controller.print(0, 0, "Arm:%8.2f", armCentidegrees / 100.0);
+		}
+	} else {
+		if (!std::isfinite(cascadeDegrees)) {
+			controller.print(1, 0, "Cascade: ERROR ");
+		} else {
+			controller.print(1, 0, "Cascade:%6.1f", cascadeDegrees);
+		}
+	}
+
+	updateArmLine = !updateArmLine;
+}
+
+constexpr double mechanismTargetToleranceDegrees = 25.0;
+constexpr std::int32_t mechanismTargetToleranceCentidegrees = 2500;
+constexpr std::uint32_t mechanismSettleTimeMs = 100;
+constexpr std::uint32_t mechanismLoopMs = 10;
+
+std::int32_t degreesToCentidegrees(double degrees) {
+	return static_cast<std::int32_t>(std::round(degrees * 100.0));
+}
+
+void setArmTarget(double degrees) {
+	armTargetCentidegrees.store(degreesToCentidegrees(degrees));
+}
+
+void setCascadeTarget(double degrees) {
+	cascadeTargetCentidegrees.store(degreesToCentidegrees(degrees));
+}
+
+// Full power outside the slowdown range, then a linear approach to the upward
+// holding power. The holding power replaces the zero at the end of a normal
+// 100-to-0 profile because gravity would make the mechanism sag at zero power.
+double linearMechanismOutput(double errorDegrees, double slowdownDegrees, double holdPower) {
+	constexpr double maxPower = 127.0;
+	double normalizedError = errorDegrees / slowdownDegrees;
+	normalizedError = std::fmax(-1.0, std::fmin(1.0, normalizedError));
+
+	if (normalizedError >= 0) {
+		return holdPower + (maxPower - holdPower) * normalizedError;
+	}
+	return holdPower + (maxPower + holdPower) * normalizedError;
+}
+
+// This is the only task that commands the arm and cascade motors. It never
+// times out: after reaching a target, it keeps correcting both mechanisms.
+void mechanismPositionController() {
+	// Increase a hold power if that mechanism still rests below its target;
+	// decrease it if the mechanism steadily creeps upward.
+	constexpr double armUpwardHoldPower = 35.0;
+	constexpr double cascadeUpwardHoldPower = 25.0;
+
+	// Each mechanism stays at full power until it enters this distance, then
+	// power falls linearly toward its gravity-holding value.
+	constexpr double armSlowdownDegrees = 30.0;
+	constexpr double cascadeSlowdownDegrees = 150.0;
+	constexpr double fullPowerKickMinimumErrorDegrees = 1.0;
+
+	std::int32_t armPreviousTarget = 0;
+	bool armPidInitialized = false;
+
+	std::int32_t cascadePreviousTarget = 0;
+	bool cascadePidInitialized = false;
+
+	while (true) {
+		if (pros::competition::is_disabled()) {
+			armMotor.move(0);
+			cascadeMotor.move(0);
+			armPidInitialized = false;
+			cascadePidInitialized = false;
+			pros::delay(mechanismLoopMs);
+			continue;
+		}
+
+		const std::int32_t armTarget = armTargetCentidegrees.load();
+		const std::int32_t armPosition = armRotationSensor.get_position();
+		if (armPosition == PROS_ERR) {
+			armMotor.move(0);
+			armPidInitialized = false;
+		} else {
+			const double armError = (armTarget - armPosition) / 100.0;
+			const bool targetChanged = !armPidInitialized || armTarget != armPreviousTarget;
+			if (targetChanged) {
+				armPreviousTarget = armTarget;
+				armPidInitialized = true;
+			}
+
+			// Position zero receives no upward feedforward, so position 1 can rest at
+			// the bottom. Every raised target gets gravity compensation.
+			const double armHoldPower = armTarget > 0 ? armUpwardHoldPower : 0.0;
+			double armOutput = linearMechanismOutput(armError, armSlowdownDegrees, armHoldPower);
+			// Give every newly requested movement one immediate 100% command. Long
+			// movements remain at 100% until they enter the slowdown range.
+			if (targetChanged && std::abs(armError) > fullPowerKickMinimumErrorDegrees) {
+				armOutput = std::copysign(127.0, armError);
+			}
+			armOutput = std::fmax(-127.0, std::fmin(127.0, armOutput));
+			armMotor.move(static_cast<std::int32_t>(std::round(armOutput)));
+		}
+
+		const std::int32_t cascadeTarget = cascadeTargetCentidegrees.load();
+		const double cascadePosition = cascadeMotor.get_position();
+		if (!std::isfinite(cascadePosition)) {
+			cascadeMotor.move(0);
+			cascadePidInitialized = false;
+		} else {
+			const double cascadeTargetDegrees = cascadeTarget / 100.0;
+			const double cascadeError = cascadeTargetDegrees - cascadePosition;
+			const bool targetChanged =
+			    !cascadePidInitialized || cascadeTarget != cascadePreviousTarget;
+			if (targetChanged) {
+				cascadePreviousTarget = cascadeTarget;
+				cascadePidInitialized = true;
+			}
+
+			const double cascadeHoldPower =
+			    cascadeTarget > 0 ? cascadeUpwardHoldPower : 0.0;
+			double cascadeOutput =
+			    linearMechanismOutput(cascadeError, cascadeSlowdownDegrees, cascadeHoldPower);
+			if (targetChanged &&
+			    std::abs(cascadeError) > fullPowerKickMinimumErrorDegrees) {
+				cascadeOutput = std::copysign(127.0, cascadeError);
+			}
+			cascadeOutput = std::fmax(-127.0, std::fmin(127.0, cascadeOutput));
+			cascadeMotor.move(static_cast<std::int32_t>(std::round(cascadeOutput)));
+		}
+
+		pros::delay(mechanismLoopMs);
+	}
+}
+
+// Set an absolute cascade target and wait until it remains within 25 degrees.
+// There is no overall timeout; the background controller keeps holding it even
+// after this function returns. A newer target cancels this wait safely.
+void cascadeSpinToDegree(double degrees) {
+	const std::int32_t requestedTarget = degreesToCentidegrees(degrees);
+	cascadeTargetCentidegrees.store(requestedTarget);
+	std::uint32_t settledSince = 0;
+
+	while (cascadeTargetCentidegrees.load() == requestedTarget) {
+		const double position = cascadeMotor.get_position();
+		if (!std::isfinite(position)) return;
+
+		const double error = degrees - position;
+		if (std::abs(error) <= mechanismTargetToleranceDegrees) {
+			if (settledSince == 0) settledSince = pros::millis();
+			if (pros::millis() - settledSince >= mechanismSettleTimeMs) return;
+		} else {
+			settledSince = 0;
+		}
+		pros::delay(mechanismLoopMs);
+	}
+}
+
+// Set an absolute arm target and wait until the port-5 Rotation Sensor remains
+// within 25 degrees. The persistent controller continues holding afterward.
+void armSpinToDegree(double degrees) {
+	const std::int32_t requestedTarget = degreesToCentidegrees(degrees);
+	armTargetCentidegrees.store(requestedTarget);
+	std::uint32_t settledSince = 0;
+
+	while (armTargetCentidegrees.load() == requestedTarget) {
+		const std::int32_t position = armRotationSensor.get_position();
+		if (position == PROS_ERR) return;
+
+		if (std::abs(requestedTarget - position) <= mechanismTargetToleranceCentidegrees) {
+			if (settledSince == 0) settledSince = pros::millis();
+			if (pros::millis() - settledSince >= mechanismSettleTimeMs) return;
+		} else {
+			settledSince = 0;
+		}
+		pros::delay(mechanismLoopMs);
+	}
+}
+
+// Each numbered position combines an arm target and a cascade target.
+struct PositionTargets {
+	double armDegrees;
+	double cascadeDegrees;
+};
+
+// Array index 0 is position 1; array index 5 is position 6.
+constexpr PositionTargets positions[6] = {
+	{0.0, 0.0},    // position 1
+	{0.0, 650.0},  // position 2
+	{0.0, 1300.0}, // position 3
+	{85.0, 0.0},   // position 4
+	{90.0, 650.0},// position 5
+	{95.0, 1300.0}// position 6
+};
+
+constexpr auto nextPositionButton = pros::E_CONTROLLER_DIGITAL_L1;
+constexpr auto positionOneButton = pros::E_CONTROLLER_DIGITAL_L2;
+constexpr auto cascadeDropButton = pros::E_CONTROLLER_DIGITAL_R1;
+
+// The selector is one-based to match the position names above.
+int selectedPosition = 1;
+
+void moveToPosition(int positionNumber) {
+	if (positionNumber < 1 || positionNumber > 6) return;
+
+	const PositionTargets& target = positions[positionNumber - 1];
+	// Driver presets only update the persistent targets, so the chassis loop
+	// remains responsive while both mechanisms move and hold simultaneously.
+	setArmTarget(target.armDegrees);
+	setCascadeTarget(target.cascadeDegrees);
+}
+
+// Advance by exactly one preset per call. This intentionally saturates at
+// position 6 instead of wrapping back to position 1.
+void togglePosition() {
+	if (selectedPosition >= 6) return;
+
+	selectedPosition++;
+	moveToPosition(selectedPosition);
+}
+
+// Select and move directly to position 1 from any current preset.
+void goToPositionOne() {
+	selectedPosition = 1;
+	moveToPosition(1);
+}
+
+// While R1 is held, lower only the cascade. On release, this is where the claw
+// will open once it has been added, then both mechanisms return to position 1.
+void handleCascadeDropAndReturn() {
+	static bool wasHeld = false;
+	const bool isHeld = controller.get_digital(cascadeDropButton);
+
+	if (isHeld) {
+		setCascadeTarget(0.0);
+	} else if (wasHeld) {
+		// OpenClaw.extend(); // Enable when the release action is ready.
+		goToPositionOne();
+	}
+
+	wasHeld = isHeld;
+}
 
 //DISTANCE SENSOR RESET FUNCTIONS
 
@@ -544,7 +831,18 @@ void opcontrol() {
     // loop to continuously update motors
 
     while (true) {
-        // get joystick positions
+		displayMechanismDegrees();
+
+		// One new-press event equals one preset change; holding X does not repeat.
+		if (controller.get_digital_new_press(nextPositionButton)) {
+			togglePosition();
+		}
+		if (controller.get_digital_new_press(positionOneButton)) {
+			goToPositionOne();
+		}
+		handleCascadeDropAndReturn();
+
+		// get joystick positions
         int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
         int rightY = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y);
         int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
