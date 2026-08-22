@@ -32,10 +32,25 @@ struct DsrSensorConfig {
 	    : heading_offset(heading_offset), x_offset(x_offset), y_offset(y_offset) {}
 };
 
+// One mechanism position is always written as {arm degrees, cascade degrees}.
+struct PositionTargets {
+	double armDegrees;
+	double cascadeDegrees;
+};
+
+// TUNE THESE: target reached immediately after the sensors are zeroed at startup.
+// Position 1 and the reset button use this same base position.
+constexpr PositionTargets startupBasePosition = {0.0, 125.0};
+
 // individual mechanism motors
 pros::Motor armMotor(4); // normal direction; arm sensor remains reversed
 pros::Motor cascadeMotor(-20);
 pros::Motor intakeMotor(11);
+
+// true: active position correction + hold brake
+// false: no position correction + coast brake (manual control only)
+constexpr bool armHoldingEnabled = true;
+constexpr bool cascadeHoldingEnabled = true;
 
 // Double-acting pneumatic valves on the V5 brain's three-wire ADI ports.
 // Both start retracted; extend() and retract() switch their two positions.
@@ -54,6 +69,7 @@ std::atomic<bool> armManualCoast{false};
 std::atomic<std::int32_t> cascadeManualPower{0};
 
 void mechanismPositionController();
+std::int32_t degreesToCentidegrees(double degrees);
 
 
 // Inertial sensor on placeholder port 7
@@ -194,17 +210,20 @@ void initialize() {
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
 
-	// Mechanism positions use degrees and are absolute from their startup zero.
+	// The physical startup pose is the sensor origin: arm 0, cascade 0.
+	// The controller then moves both mechanisms to startupBasePosition.
 	// Targets are not wrapped, so values such as 400 degrees remain valid.
 	cascadeMotor.set_encoder_units(pros::MotorUnits::degrees);
 	cascadeMotor.tare_position();
 	armRotationSensor.reset_position();
-	cascadeMotor.set_brake_mode(pros::MotorBrake::hold);
-	armMotor.set_brake_mode(pros::MotorBrake::hold);
+	cascadeMotor.set_brake_mode(cascadeHoldingEnabled ? pros::MotorBrake::hold
+	                                                : pros::MotorBrake::coast);
+	armMotor.set_brake_mode(armHoldingEnabled ? pros::MotorBrake::hold
+	                                        : pros::MotorBrake::coast);
 	// The main claw's retracted state is its closed starting state.
 	OpenClaw.retract();
-	armTargetCentidegrees.store(0);
-	cascadeTargetCentidegrees.store(0);
+	armTargetCentidegrees.store(degreesToCentidegrees(startupBasePosition.armDegrees));
+	cascadeTargetCentidegrees.store(degreesToCentidegrees(startupBasePosition.cascadeDegrees));
 	armManualPower.store(0);
 	armManualCoast.store(false);
 	cascadeManualPower.store(0);
@@ -256,16 +275,17 @@ void displayMechanismDegrees() {
 	updateArmLine = !updateArmLine;
 }
 
-constexpr double mechanismTargetToleranceDegrees = 25.0;
-constexpr std::int32_t mechanismTargetToleranceCentidegrees = 2500;
+constexpr double cascadeTargetToleranceDegrees = 25.0;
+constexpr std::int32_t armTargetToleranceCentidegrees = 500;
 constexpr std::uint32_t mechanismSettleTimeMs = 100;
 constexpr std::uint32_t mechanismLoopMs = 10;
 constexpr double armMinimumDegrees = 0.0;
-constexpr double armMaximumDegrees = 100.0;
+constexpr double armMaximumDegrees = 120.0;
 constexpr double cascadeMinimumDegrees = 0.0;
-constexpr double cascadeMaximumDegrees = 1350.0;
+constexpr double cascadeMaximumDegrees = 1500.0;
 constexpr std::int32_t armMinimumCentidegrees = 0;
 constexpr std::int32_t armMaximumCentidegrees = 10000;
+constexpr std::int32_t armZeroRestBandCentidegrees = 200;
 
 std::int32_t degreesToCentidegrees(double degrees) {
 	return static_cast<std::int32_t>(std::round(degrees * 100.0));
@@ -298,7 +318,7 @@ double linearMechanismOutput(double errorDegrees, double slowdownDegrees, double
 // Smooth S-curve for the arm. Its gentle slopes remove the high-power approach
 // that was carrying the arm past its target through gearbox backlash.
 double curvedArmOutput(double errorDegrees, double slowdownDegrees, double holdPower,
-                       double maximumPower) {
+                       double maximumPower, double downwardCorrectionPerDegree) {
 	double normalizedError = errorDegrees / slowdownDegrees;
 	normalizedError = std::fmax(-1.0, std::fmin(1.0, normalizedError));
 	const double magnitude = std::abs(normalizedError);
@@ -307,7 +327,12 @@ double curvedArmOutput(double errorDegrees, double slowdownDegrees, double holdP
 	if (normalizedError >= 0) {
 		return holdPower + (maximumPower - holdPower) * curvedMagnitude;
 	}
-	return holdPower - (maximumPower + holdPower) * curvedMagnitude;
+
+	// Use a stronger linear correction above the target. Applying the same broad
+	// S-curve here allowed the gravity feedforward to keep driving upward even
+	// tens of degrees too high (for example, +26 power at a -24 degree error).
+	return std::fmax(-maximumPower,
+	                 holdPower + downwardCorrectionPerDegree * errorDegrees);
 }
 
 // This is the only task that commands the arm and cascade motors. It never
@@ -315,8 +340,15 @@ double curvedArmOutput(double errorDegrees, double slowdownDegrees, double holdP
 void mechanismPositionController() {
 	// Increase a hold power if that mechanism still rests below its target;
 	// decrease it if the mechanism steadily creeps upward.
-	constexpr double armUpwardHoldPower = 45.0;
+	constexpr double armUpwardHoldPower = 15.0;
+	constexpr double armMinimumUpwardMovePower = 60.0;
+	constexpr double armMovePowerFadeDegrees = 12.0;
 	constexpr double armMaximumMovePower = 85.0;
+	constexpr double armDownwardCorrectionPerDegree = 4.0;
+	constexpr double armVelocityFilterWeight = 0.20;
+	constexpr double armVelocityDamping = 0.45;
+	constexpr double armDampingRangeDegrees = 35.0;
+	constexpr double armMaximumDampingPower = 35.0;
 	constexpr double cascadeUpwardHoldPower = 25.0;
 
 	// The arm uses its curve across most of a normal move for gentler motion.
@@ -326,6 +358,9 @@ void mechanismPositionController() {
 	constexpr double fullPowerKickMinimumErrorDegrees = 1.0;
 
 	std::int32_t armPreviousTarget = 0;
+	std::int32_t armPreviousPosition = 0;
+	std::uint32_t armPreviousSampleTime = 0;
+	double armFilteredVelocity = 0.0;
 	bool armPidInitialized = false;
 
 	std::int32_t cascadePreviousTarget = 0;
@@ -363,12 +398,37 @@ void mechanismPositionController() {
 			    manualArmPower < 0 && armPosition <= armMinimumCentidegrees;
 			armMotor.move(pushingPastUpperLimit || pushingPastLowerLimit ? 0 : manualArmPower);
 			armPidInitialized = false;
+		} else if (!armHoldingEnabled) {
+			// With no manual input, send zero power and let the coast brake mode act.
+			armMotor.move(0);
+			armPidInitialized = false;
+		} else if (armTarget <= armMinimumCentidegrees &&
+		           armPosition <= armMinimumCentidegrees + armZeroRestBandCentidegrees) {
+			// At the bottom, rely on HOLD braking instead of reacting to tiny negative
+			// readings and repeatedly triggering the upward movement-power floor.
+			armMotor.move(0);
+			armPidInitialized = false;
 		} else {
 			const double armError = (armTarget - armPosition) / 100.0;
 			const bool targetChanged = !armPidInitialized || armTarget != armPreviousTarget;
+			const std::uint32_t armSampleTime = pros::millis();
 			if (targetChanged) {
 				armPreviousTarget = armTarget;
+				armPreviousPosition = armPosition;
+				armPreviousSampleTime = armSampleTime;
+				armFilteredVelocity = 0.0;
 				armPidInitialized = true;
+			} else {
+				const std::uint32_t sampleTimeMs = armSampleTime - armPreviousSampleTime;
+				if (sampleTimeMs > 0) {
+					const double rawVelocity =
+					    ((armPosition - armPreviousPosition) / 100.0) *
+					    (1000.0 / sampleTimeMs);
+					armFilteredVelocity +=
+					    armVelocityFilterWeight * (rawVelocity - armFilteredVelocity);
+					armPreviousPosition = armPosition;
+					armPreviousSampleTime = armSampleTime;
+				}
 			}
 
 			// Position zero receives no upward feedforward, so position 1 can rest at
@@ -376,7 +436,27 @@ void mechanismPositionController() {
 			const double armHoldPower = armTarget > 0 ? armUpwardHoldPower : 0.0;
 			double armOutput =
 			    curvedArmOutput(armError, armSlowdownDegrees, armHoldPower,
-			                    armMaximumMovePower);
+			                    armMaximumMovePower, armDownwardCorrectionPerDegree);
+			// A heavy arm needs more torque to begin lifting than it needs to remain
+			// stationary. Apply a separate movement floor only while below target,
+			// then fade it into the lower hold power over the final few degrees.
+			if (armError > 0.0) {
+				const double movePowerFraction =
+				    std::fmin(1.0, armError / armMovePowerFadeDegrees);
+				const double minimumUpwardOutput =
+				    armHoldPower +
+				    (armMinimumUpwardMovePower - armHoldPower) * movePowerFraction;
+				armOutput = std::fmax(armOutput, minimumUpwardOutput);
+			}
+			// Remove power in proportion to measured arm speed as it approaches the
+			// target. If the arm stalls, velocity becomes zero and the full movement
+			// floor automatically returns, which is important for this heavy arm.
+			const double dampingFraction = std::fmax(
+			    0.0, 1.0 - std::abs(armError) / armDampingRangeDegrees);
+			double dampingPower = armVelocityDamping * armFilteredVelocity * dampingFraction;
+			dampingPower = std::fmax(-armMaximumDampingPower,
+			                         std::fmin(armMaximumDampingPower, dampingPower));
+			armOutput -= dampingPower;
 			// Automatic arm movement is intentionally capped below full power.
 			armOutput = std::fmax(-127.0, std::fmin(127.0, armOutput));
 			armMotor.move(static_cast<std::int32_t>(std::round(armOutput)));
@@ -398,6 +478,10 @@ void mechanismPositionController() {
 			cascadeMotor.move(pushingPastUpperLimit || pushingPastLowerLimit
 			                      ? 0
 			                      : manualCascadePower);
+			cascadePidInitialized = false;
+		} else if (!cascadeHoldingEnabled) {
+			// With no manual input, send zero power and let the coast brake mode act.
+			cascadeMotor.move(0);
 			cascadePidInitialized = false;
 		} else {
 			const double cascadeTargetDegrees = cascadeTarget / 100.0;
@@ -426,10 +510,12 @@ void mechanismPositionController() {
 }
 
 // Set an absolute cascade target and wait until it remains within 25 degrees.
-// There is no overall timeout; the background controller keeps holding it even
-// after this function returns. A newer target cancels this wait safely.
+// During calibration, correction is disabled, so this records the target and
+// returns without trying to move or hold the cascade.
 void cascadeSpinToDegree(double degrees) {
 	setCascadeTarget(degrees);
+	if (!cascadeHoldingEnabled) return;
+
 	const std::int32_t requestedTarget = cascadeTargetCentidegrees.load();
 	const double requestedDegrees = requestedTarget / 100.0;
 	std::uint32_t settledSince = 0;
@@ -439,7 +525,7 @@ void cascadeSpinToDegree(double degrees) {
 		if (!std::isfinite(position)) return;
 
 		const double error = requestedDegrees - position;
-		if (std::abs(error) <= mechanismTargetToleranceDegrees) {
+		if (std::abs(error) <= cascadeTargetToleranceDegrees) {
 			if (settledSince == 0) settledSince = pros::millis();
 			if (pros::millis() - settledSince >= mechanismSettleTimeMs) return;
 		} else {
@@ -449,18 +535,26 @@ void cascadeSpinToDegree(double degrees) {
 	}
 }
 
-// Set an absolute arm target and wait until the port-5 Rotation Sensor remains
-// within 25 degrees. The persistent controller continues holding afterward.
-void armSpinToDegree(double degrees) {
+// Set an absolute arm target and wait until the port-5 Rotation Sensor settles.
+// A timeout of 0 keeps the original unlimited wait behavior.
+void armSpinToDegree(double degrees, std::uint32_t timeoutMs = 0) {
 	setArmTarget(degrees);
+	if (!armHoldingEnabled) return;
+
 	const std::int32_t requestedTarget = armTargetCentidegrees.load();
+	const std::uint32_t movementStart = pros::millis();
 	std::uint32_t settledSince = 0;
 
 	while (armTargetCentidegrees.load() == requestedTarget) {
 		const std::int32_t position = armRotationSensor.get_position();
 		if (position == PROS_ERR) return;
+		if (timeoutMs > 0 && pros::millis() - movementStart >= timeoutMs) {
+			// Cancel the old target and hold wherever the arm reached.
+			setArmTarget(position / 100.0);
+			return;
+		}
 
-		if (std::abs(requestedTarget - position) <= mechanismTargetToleranceCentidegrees) {
+		if (std::abs(requestedTarget - position) <= armTargetToleranceCentidegrees) {
 			if (settledSince == 0) settledSince = pros::millis();
 			if (pros::millis() - settledSince >= mechanismSettleTimeMs) return;
 		} else {
@@ -470,20 +564,14 @@ void armSpinToDegree(double degrees) {
 	}
 }
 
-// Each numbered position combines an arm target and a cascade target.
-struct PositionTargets {
-	double armDegrees;
-	double cascadeDegrees;
-};
-
 // Array index 0 is position 1; array index 5 is position 6.
 constexpr PositionTargets positions[6] = {
-	{0.0, 0.0},    // position 1  // position 2
-	{10.0, 1300.0}, // position 3
-	{95.0, 0.0},   // position 4
-	{100.0, 950.0},// position 5
-	{105.0, 1300.0},// position 6
-	{105.0, 1300.0}
+	{startupBasePosition.armDegrees, startupBasePosition.cascadeDegrees}, // position 1 / reset
+	{0, 1200.0}, // position 3
+	{110.0, 0.0},   // position 4
+	{110.0, 1000.0},// position 5
+	{110.0, 1000.0},// position 6
+	{110.0, 1000.0}
 
 };
 
@@ -575,7 +663,8 @@ void handleManualArmControl() {
 		armManualCoast.store(true);
 		armMotor.set_brake_mode(pros::MotorBrake::coast);
 	} else if (!requestedCoast && previouslyCoasting) {
-		armMotor.set_brake_mode(pros::MotorBrake::hold);
+		armMotor.set_brake_mode(armHoldingEnabled ? pros::MotorBrake::hold
+		                                          : pros::MotorBrake::coast);
 		armManualCoast.store(false);
 	}
 
@@ -918,11 +1007,69 @@ void competition_initialize() {}
 
 	}
 
-	void example_auton2() {
+		void example_auton2() {
 
+		}
+
+// Basic straight movement measured with the integrated encoders on the first
+// blue motor in each group. This does not use odometry, DSR, or LemLib motion.
+void simple_drive_distance(double distanceInches, std::int32_t power) {
+	constexpr double pi = 3.141592653589793;
+	constexpr double driveWheelDiameterInches = 3.25;
+	constexpr double motorRevolutionsPerWheelRevolution = 1.0;
+	constexpr std::uint32_t safetyTimeoutMs = 3000;
+
+	const double targetMotorDegrees =
+	    std::abs(distanceInches) * 360.0 * motorRevolutionsPerWheelRevolution /
+	    (pi * driveWheelDiameterInches);
+	const std::int32_t direction = distanceInches < 0.0 ? -1 : 1;
+	const std::int32_t driveCommand = direction * std::abs(power);
+
+	leftMotors.set_encoder_units(pros::MotorUnits::degrees, 0);
+	rightMotors.set_encoder_units(pros::MotorUnits::degrees, 0);
+	leftMotors.tare_position(0);
+	rightMotors.tare_position(0);
+	leftMotors.set_brake_mode_all(pros::MotorBrake::brake);
+	rightMotors.set_brake_mode_all(pros::MotorBrake::brake);
+
+	leftMotors.move(driveCommand);
+	rightMotors.move(driveCommand);
+	const std::uint32_t movementStart = pros::millis();
+
+	while (pros::millis() - movementStart < safetyTimeoutMs) {
+		const double leftDegrees = std::abs(leftMotors.get_position(0));
+		const double rightDegrees = std::abs(rightMotors.get_position(0));
+		if (!std::isfinite(leftDegrees) || !std::isfinite(rightDegrees)) break;
+
+		const double averageMotorDegrees = (leftDegrees + rightDegrees) / 2.0;
+		if (averageMotorDegrees >= targetMotorDegrees) break;
+		pros::delay(10);
 	}
 
-// Example: a 24-inch forward move written in the planner's row format.
+	leftMotors.brake();
+	rightMotors.brake();
+	pros::delay(200);
+}
+
+void simple_auton() {
+	// Move the arm first and wait for it to reach 50 degrees.
+	armSpinToDegree(100.0, 6000); // 6-second timeout
+	armSpinToDegree(0.0);
+
+	// TUNE THESE distances in inches and the direct motor power from 0 to 127.
+	constexpr double backwardDistanceInches = -12.0;
+	constexpr double forwardDistanceInches = 15.0;
+	constexpr std::int32_t drivePower = 80;
+
+	// Repeat: backward, stop, forward, stop — two times.
+	for (int movement = 0; movement < 2; movement++) {
+		simple_drive_distance(backwardDistanceInches, drivePower);
+		simple_drive_distance(forwardDistanceInches, drivePower);
+	}
+	simple_drive_distance(-20.0, drivePower);
+}
+
+	// Example: a 24-inch forward move written in the planner's row format.
 // Replace these rows with your own export. Each row is:
 //   { time_s, x_in, y_in, theta_rad, v_ips, omega_radps }
 static const RamsetePoint kExampleRamsetePath[] = {
@@ -956,8 +1103,8 @@ void ramsete_auton_example() {
  * from where it left off.
  */
 void autonomous() {
-	example_auton();
-    //the auton you want to run
+	simple_auton();
+	    //the auton you want to run
     // To run a planner-exported Ramsete path instead, call:
     //   ramsete_auton_example();
 }
