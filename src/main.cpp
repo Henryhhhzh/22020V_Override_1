@@ -1,64 +1,7 @@
 #include "main.h"
-#include "lemlib/api.hpp" // IWYU pragma: keep
+#include "robot/hardware.hpp"
 #include <atomic>
 #include <cmath>
-
-pros::Controller controller(pros::E_CONTROLLER_MASTER);
-
-// motor groups
-pros::MotorGroup leftMotors({1, -2, -3}, pros::MotorGearset::blue); // left drive motors, reversed
-pros::MotorGroup rightMotors({-10, 9, 8}, pros::MotorGearset::blue); // right drive motors
-
-enum class RobotDsrSensor {
-	front,
-	right,
-	back,
-	left
-};
-
-enum class DsrWall {
-	top,
-	right,
-	bottom,
-	left
-};
-
-struct DsrSensorConfig {
-	float heading_offset; // direction the sensor points compared to robot front, in degrees
-	float x_offset; // sensor-local forward offset from tracking point to sensor lens, in inches
-	float y_offset; // sensor-local right-side offset from tracking point to sensor lens, in inches
-
-	DsrSensorConfig(float heading_offset, float x_offset, float y_offset)
-	    : heading_offset(heading_offset), x_offset(x_offset), y_offset(y_offset) {}
-};
-
-// One mechanism position is always written as {arm degrees, cascade degrees}.
-struct PositionTargets {
-	double armDegrees;
-	double cascadeDegrees;
-};
-
-// TUNE THESE: target reached immediately after the sensors are zeroed at startup.
-// Position 1 and the reset button use this same base position.
-constexpr PositionTargets startupBasePosition = {0.0, 125.0};
-
-// individual mechanism motors
-pros::Motor armMotor(4); // normal direction; arm sensor remains reversed
-pros::Motor cascadeMotor(-20);
-pros::Motor intakeMotor(11);
-
-// true: active position correction + hold brake
-// false: no position correction + coast brake (manual control only)
-constexpr bool armHoldingEnabled = true;
-constexpr bool cascadeHoldingEnabled = true;
-
-// Double-acting pneumatic valves on the V5 brain's three-wire ADI ports.
-// Both start retracted; extend() and retract() switch their two positions.
-pros::adi::Pneumatics VariableClaw('H', false);
-pros::adi::Pneumatics OpenClaw('F', false, true); // Inverted: retracted is physically closed.
-
-// Auxiliary Rotation Sensor on port 5; not used for odometry.
-pros::Rotation armRotationSensor(-5);
 
 // The mechanism controller owns both motors continuously. Targets are stored
 // in centidegrees so changing a target is atomic on the V5 brain.
@@ -71,118 +14,6 @@ std::atomic<std::int32_t> cascadeManualPower{0};
 void mechanismPositionController();
 std::int32_t degreesToCentidegrees(double degrees);
 
-
-// Inertial sensor on placeholder port 7
-pros::Imu imu(7);
-
-
-// tracking wheels
-// Tracking-wheel sensor ports are placeholders until final wiring is known.
-// Horizontal tracking wheel encoder: Rotation Sensor on port 18, reversed.
-pros::Rotation horizontalEnc(-18);
-// Vertical tracking wheel encoder: Rotation Sensor on port 19, reversed.
-pros::Rotation verticalEnc(-19);
-// horizontal tracking wheel. 2.75" diameter, 5.75" offset, back of the robot (negative)
-lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, -4.523);
-// vertical tracking wheel. 2.75" diameter, 2.5" offset, left of the robot (negative)
-lemlib::TrackingWheel vertical(&verticalEnc, lemlib::Omniwheel::NEW_2, -0.5);
-
-// drivetrain settings
-lemlib::Drivetrain drivetrain(&leftMotors, // left motor group
-                              &rightMotors, // right motor group
-                              10.1, // 10 inch track width
-                              lemlib::Omniwheel::NEW_325, // using new 4" omnis
-                              450, // drivetrain rpm is 360
-                              1 // horizontal drift is 2. If we had traction wheels, it would have been 8
-);
-
-// lateral motion controller
-lemlib::ControllerSettings linearController(5.4, // proportional gain (kP)
-                                            0.2, // integral gain (kI)
-                                            3.3, // derivative gain (kD)
-                                            3, // anti windup
-                                            .8, // small error range, in inches
-                                            100, // small error range timeout, in milliseconds
-                                            2, // large error range, in inches
-                                            500, // large error range timeout, in milliseconds
-                                            20 // maximum acceleration (slew)   
-);
-
-// angular motion controller
-lemlib::ControllerSettings angularController(2, // proportional gain (kP)
-                                             0.1, // integral gain (kI)
-                                             13, // derivative gain (kD)
-                                             3, // anti windup
-                                             1, // small error range, in degrees
-                                             100, // small error range timeout, in milliseconds
-                                             3, // large error range, in degrees
-                                             500, // large error range timeout, in milliseconds
-                                             0 // maximum acceleration (slew)
-);
-
-// sensors for odometry
-lemlib::OdomSensors sensors(&vertical, // vertical tracking wheel
-                            nullptr, // vertical tracking wheel 2, set to nullptr as we don't have a second one
-                            &horizontal, // horizontal tracking wheel
-                            nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
-                            &imu // inertial sensor
-);
-
-// input curve for throttle input during driver control
-lemlib::ExpoDriveCurve throttleCurve(3, // joystick deadband out of 127
-                                     10, // minimum output where drivetrain will move out of 127
-                                     1.019 // expo curve gain
-);
-
-// input curve for steer input during driver control
-lemlib::ExpoDriveCurve steerCurve(3, // joystick deadband out of 127
-	                                  10, // minimum output where drivetrain will move out of 127
-	                                  1.015 // expo curve gain
-);
-
-// DSR wall locations
-constexpr float dsrTopWallY = 72.0; // top wall Y coordinate, in inches
-constexpr float dsrRightWallX = 72.0; // right wall X coordinate, in inches
-constexpr float dsrBottomWallY = -72.0; // bottom wall Y coordinate, in inches
-constexpr float dsrLeftWallX = -72.0; // left wall X coordinate, in inches
-
-// DSR reading limits
-constexpr float dsrMinValidDistance = 0.5; // minimum valid distance sensor reading, in inches
-constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor reading, in inches
-
-// DSR sensor offsets are measured from the tracking point to the distance sensor lens.
-// These are sensor-local offsets, so they are different for each physical sensor:
-// x_offset = forward/back along the direction that sensor points. Positive is outward.
-// y_offset = side offset to that sensor's right. Negative is to that sensor's left.
-// Example: front sensor 5" in front of tracking point and 1" to robot right -> (0, 5, 1).
-// Example: right sensor 4" to robot right and 0.5" toward robot front -> (90, 4, -0.5).
-// These offset coordinates are sensor-local, not field-global.
-// DSR front physical sensor settings
-DsrSensorConfig dsrFrontSensor(0, // heading offset from robot front, in degrees
-	                               0, // x_offset: positive toward robot front, in inches
-	                               0 // y_offset: positive toward robot right, in inches
-);
-
-// DSR right physical sensor settings
-DsrSensorConfig dsrRightSensor(90, // heading offset from robot front, in degrees
-	                               0, // x_offset: positive toward robot right, in inches
-	                               0 // y_offset: positive toward robot back, in inches
-);
-
-// DSR back physical sensor settings
-DsrSensorConfig dsrBackSensor(180, // heading offset from robot front, in degrees
-	                              0, // x_offset: positive toward robot back, in inches
-	                              0 // y_offset: positive toward robot left, in inches
-);
-
-// DSR left physical sensor settings
-DsrSensorConfig dsrLeftSensor(270, // heading offset from robot front, in degrees
-	                              0, // x_offset: positive toward robot left, in inches
-	                              0 // y_offset: positive toward robot front, in inches
-);
-
-// create the chassis
-lemlib::Chassis chassis(drivetrain, linearController, angularController, sensors, &throttleCurve, &steerCurve);
 
 /**
  * A callback function for LLEMU's center button.
@@ -274,18 +105,6 @@ void displayMechanismDegrees() {
 
 	updateArmLine = !updateArmLine;
 }
-
-constexpr double cascadeTargetToleranceDegrees = 25.0;
-constexpr std::int32_t armTargetToleranceCentidegrees = 500;
-constexpr std::uint32_t mechanismSettleTimeMs = 100;
-constexpr std::uint32_t mechanismLoopMs = 10;
-constexpr double armMinimumDegrees = 0.0;
-constexpr double armMaximumDegrees = 120.0;
-constexpr double cascadeMinimumDegrees = 0.0;
-constexpr double cascadeMaximumDegrees = 1500.0;
-constexpr std::int32_t armMinimumCentidegrees = 0;
-constexpr std::int32_t armMaximumCentidegrees = 10000;
-constexpr std::int32_t armZeroRestBandCentidegrees = 200;
 
 std::int32_t degreesToCentidegrees(double degrees) {
 	return static_cast<std::int32_t>(std::round(degrees * 100.0));
@@ -564,32 +383,6 @@ void armSpinToDegree(double degrees, std::uint32_t timeoutMs = 0) {
 	}
 }
 
-// Array index 0 is position 1; array index 5 is position 6.
-constexpr PositionTargets positions[6] = {
-	{startupBasePosition.armDegrees, startupBasePosition.cascadeDegrees}, // position 1 / reset
-	{0, 1200.0}, // position 3
-	{110.0, 0.0},   // position 4
-	{110.0, 1000.0},// position 5
-	{110.0, 1000.0},// position 6
-	{110.0, 1000.0}
-
-};
-
-constexpr auto nextPositionButton = pros::E_CONTROLLER_DIGITAL_Y;
-constexpr auto positionOneButton = pros::E_CONTROLLER_DIGITAL_R1;
-constexpr auto armManualUpButton = pros::E_CONTROLLER_DIGITAL_LEFT;
-constexpr auto armManualDownButton = pros::E_CONTROLLER_DIGITAL_UP;
-constexpr std::int32_t armManualSpeed = 75;
-constexpr auto cascadeDropButton = pros::E_CONTROLLER_DIGITAL_RIGHT;
-constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_R2;
-constexpr auto variableClawToggleButton = pros::E_CONTROLLER_DIGITAL_Y;
-constexpr auto cascadeManualUpButton = pros::E_CONTROLLER_DIGITAL_L1;
-constexpr auto cascadeManualDownButton = pros::E_CONTROLLER_DIGITAL_L2;
-constexpr std::int32_t cascadeManualSpeed = 127;
-constexpr auto intakeButton = pros::E_CONTROLLER_DIGITAL_RIGHT;
-constexpr std::int32_t intakeSpeed = -127;
-constexpr double clawCloseCascadeLiftDegrees = 150.0;
-
 // The selector is one-based to match the position names above.
 int selectedPosition = 1;
 
@@ -635,9 +428,9 @@ void toggleVariableClaw() {
 	VariableClaw.toggle();
 }
 
-// Run the intake only while the controller's right D-pad button is held.
-void handleIntakeControl() {
-	intakeMotor.move(controller.get_digital(intakeButton) ? intakeSpeed : 0);
+// Run outward only while controller B is held; otherwise stop the motor.
+void handleOuttakeControl() {
+	intakeMotor.move(controller.get_digital(outtakeButton) ? outtakeSpeed : 0);
 }
 
 // L2 actively raises the arm. D-pad left switches it to coast so gravity can
@@ -878,7 +671,7 @@ constexpr float kRamseteZeta = 0.7;
 // Robot/drivetrain constants. These must match the real robot and the values
 // used in the planner so the exported velocities are actually reachable.
 constexpr float kRamsetePi = 3.14159265358979;
-constexpr float kTrackWidthIn = 10.1; // matches the Drivetrain track width
+constexpr float kTrackWidthIn = 10.6; // center of middle left wheel to middle right wheel
 constexpr float kDriveWheelDiameterIn = 3.25; // NEW_325 omni
 constexpr float kDriveWheelRpm = 450.0; // wheel rpm, from the Drivetrain config
 constexpr float kMotorCartridgeRpm = 600.0; // blue cartridge
@@ -1015,8 +808,9 @@ void competition_initialize() {}
 // blue motor in each group. This does not use odometry, DSR, or LemLib motion.
 void simple_drive_distance(double distanceInches, std::int32_t power) {
 	constexpr double pi = 3.141592653589793;
-	constexpr double driveWheelDiameterInches = 3.25;
-	constexpr double motorRevolutionsPerWheelRevolution = 1.0;
+	constexpr double driveWheelDiameterInches = 2.75;
+	constexpr double motorRevolutionsPerWheelRevolution =
+	    kMotorCartridgeRpm / kDriveWheelRpm;
 	constexpr std::uint32_t safetyTimeoutMs = 3000;
 
 	const double targetMotorDegrees =
@@ -1051,22 +845,131 @@ void simple_drive_distance(double distanceInches, std::int32_t power) {
 	pros::delay(200);
 }
 
+// Relative encoder-only point turn. Positive degrees turn right; negative
+// degrees turn left. This does not read or target an IMU heading.
+void simple_turn_degrees(double turnDegrees, std::int32_t power) {
+	constexpr double driveWheelDiameterInches = 2.75;
+	constexpr double motorRevolutionsPerWheelRevolution =
+	    kMotorCartridgeRpm / kDriveWheelRpm;
+	constexpr double turnCalibration = 1.0;
+	constexpr std::uint32_t safetyTimeoutMs = 3000;
+
+	if (std::abs(turnDegrees) < 0.01 || power == 0) return;
+
+	// During a point turn, each wheel travels an arc around the robot's center.
+	const double targetMotorDegrees =
+	    std::abs(turnDegrees) * kTrackWidthIn / driveWheelDiameterInches *
+	    motorRevolutionsPerWheelRevolution * turnCalibration;
+	const std::int32_t direction = turnDegrees > 0.0 ? 1 : -1;
+	const std::int32_t turnPower = std::abs(power);
+
+	leftMotors.set_encoder_units(pros::MotorUnits::degrees, 0);
+	rightMotors.set_encoder_units(pros::MotorUnits::degrees, 0);
+	leftMotors.tare_position(0);
+	rightMotors.tare_position(0);
+	leftMotors.set_brake_mode_all(pros::MotorBrake::brake);
+	rightMotors.set_brake_mode_all(pros::MotorBrake::brake);
+
+	leftMotors.move(direction * turnPower);
+	rightMotors.move(-direction * turnPower);
+	const std::uint32_t movementStart = pros::millis();
+
+	while (pros::millis() - movementStart < safetyTimeoutMs) {
+		const double leftDegrees = std::abs(leftMotors.get_position(0));
+		const double rightDegrees = std::abs(rightMotors.get_position(0));
+		if (!std::isfinite(leftDegrees) || !std::isfinite(rightDegrees)) break;
+
+		const double averageMotorDegrees = (leftDegrees + rightDegrees) / 2.0;
+		if (averageMotorDegrees >= targetMotorDegrees) break;
+		pros::delay(10);
+	}
+
+	leftMotors.brake();
+	rightMotors.brake();
+	pros::delay(200);
+}
+
+// Drive backward until the drivetrain is loaded and nearly stopped, as when
+// contacting a wall. Motor voltage is commanded by us, so current plus velocity
+// are the useful stall signals. The timeout prevents indefinite pushing.
+void simple_drive_backward_until_wall(std::int32_t power,
+                                      std::uint32_t timeoutMs = 4000) {
+	constexpr std::uint32_t startupIgnoreMs = 350;
+	constexpr std::uint32_t wallContactConfirmMs = 250;
+	constexpr double wallContactVelocityRpm = 8.0;
+	constexpr std::int32_t wallContactCurrentMilliamps = 800;
+
+	std::int32_t drivePower = std::abs(power);
+	if (drivePower == 0 || timeoutMs == 0) return;
+	if (drivePower > 127) drivePower = 127;
+
+	leftMotors.set_brake_mode_all(pros::MotorBrake::brake);
+	rightMotors.set_brake_mode_all(pros::MotorBrake::brake);
+	leftMotors.move(-drivePower);
+	rightMotors.move(-drivePower);
+
+	const std::uint32_t movementStart = pros::millis();
+	std::uint32_t wallContactStart = 0;
+
+	while (pros::millis() - movementStart < timeoutMs) {
+		const std::uint32_t elapsedMs = pros::millis() - movementStart;
+		const double leftVelocity = std::abs(leftMotors.get_actual_velocity(0));
+		const double rightVelocity = std::abs(rightMotors.get_actual_velocity(0));
+		const std::int32_t leftCurrent = leftMotors.get_current_draw(0);
+		const std::int32_t rightCurrent = rightMotors.get_current_draw(0);
+
+		if (!std::isfinite(leftVelocity) || !std::isfinite(rightVelocity) ||
+		    leftCurrent < 0 || rightCurrent < 0) {
+			break;
+		}
+
+		const double averageVelocity = (leftVelocity + rightVelocity) / 2.0;
+		const std::int32_t averageCurrent = (leftCurrent + rightCurrent) / 2;
+		const bool wallContact = elapsedMs >= startupIgnoreMs &&
+		                         averageVelocity <= wallContactVelocityRpm &&
+		                         averageCurrent >= wallContactCurrentMilliamps;
+
+		if (wallContact) {
+			if (wallContactStart == 0) wallContactStart = pros::millis();
+			if (pros::millis() - wallContactStart >= wallContactConfirmMs) break;
+		} else {
+			wallContactStart = 0;
+		}
+
+		pros::delay(10);
+	}
+
+	leftMotors.brake();
+	rightMotors.brake();
+}
+
 void simple_auton() {
 	// Move the arm first and wait for it to reach 50 degrees.
-	armSpinToDegree(100.0, 6000); // 6-second timeout
-	armSpinToDegree(0.0);
+	armSpinToDegree(100.0, 1000); // 6-second timeout
+	cascadeSpinToDegree(500.0);
+	armSpinToDegree(0.0, 1000);
 
 	// TUNE THESE distances in inches and the direct motor power from 0 to 127.
 	constexpr double backwardDistanceInches = -12.0;
 	constexpr double forwardDistanceInches = 15.0;
-	constexpr std::int32_t drivePower = 80;
+	constexpr std::int32_t drivePower = 60;
 
 	// Repeat: backward, stop, forward, stop — two times.
 	for (int movement = 0; movement < 2; movement++) {
 		simple_drive_distance(backwardDistanceInches, drivePower);
 		simple_drive_distance(forwardDistanceInches, drivePower);
 	}
-	simple_drive_distance(-20.0, drivePower);
+	simple_drive_distance(-16.0, drivePower);
+	simple_turn_degrees(-110.0, 50);
+	simple_drive_backward_until_wall(50, 2000);
+	cascadeSpinToDegree(350.0);
+	toggleOpenClaw();
+	pros::delay(100);
+	simple_turn_degrees(200, 60);
+	simple_drive_distance(20.0, 60);
+	simple_turn_degrees(-100.0, 60);
+
+
 }
 
 	// Example: a 24-inch forward move written in the planner's row format.
@@ -1142,7 +1045,7 @@ void opcontrol() {
 		if (controller.get_digital_new_press(variableClawToggleButton)) {
 			toggleVariableClaw();
 		}
-		handleIntakeControl();
+		handleOuttakeControl();
 		handleManualArmControl();
 		handleManualCascadeControl();
 		handleCascadeDropAndReturn();
