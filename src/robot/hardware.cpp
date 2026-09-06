@@ -37,14 +37,19 @@ pros::Rotation verticalEnc(-19);
 // horizontal tracking wheel. 2.75" diameter, 5.75" offset, back of the robot (negative)
 lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, -4.523);
 // vertical tracking wheel. 2.75" diameter, 2.5" offset, left of the robot (negative)
+// TEMPORARILY UNUSED: see the odom sensors below, which run forward tracking off
+// the drive motor encoders instead. This object stays defined so restoring the
+// wheel is a one-line change in lemlib::OdomSensors.
 lemlib::TrackingWheel vertical(&verticalEnc, lemlib::Omniwheel::NEW_2, -0.5);
 
 // drivetrain settings
+// Geometry comes from robot/config.hpp so the Ramsete follower and the simple_*
+// encoder moves cannot disagree with what odometry is scaled to.
 lemlib::Drivetrain drivetrain(&leftMotors, // left motor group
                               &rightMotors, // right motor group
-	                              10.6, // center of middle left wheel to middle right wheel, in inches
-                              lemlib::Omniwheel::NEW_325, // using new 4" omnis
-                              450, // drivetrain rpm is 360
+	                              kTrackWidthIn, // center of middle left wheel to middle right wheel, in inches
+                              kDriveWheelDiameterIn, // new 2.75" omnis
+                              kDriveWheelRpm, // drivetrain wheel rpm
                               1 // horizontal drift is 2. If we had traction wheels, it would have been 8
 );
 
@@ -73,8 +78,15 @@ lemlib::ControllerSettings angularController(2, // proportional gain (kP)
 );
 
 // sensors for odometry
-lemlib::OdomSensors sensors(&vertical, // vertical tracking wheel
-                            nullptr, // vertical tracking wheel 2, set to nullptr as we don't have a second one
+// TEMPORARY: forward tracking runs off the drive motor encoders instead of the
+// vertical tracking wheel. Both vertical slots are nullptr, so chassis.calibrate()
+// builds one tracking wheel per drive side from the drivetrain settings above
+// (2.75" wheel, 450 rpm, +-trackWidth/2 offset). This is why the drivetrain's
+// wheel diameter and rpm now have to be exactly right: they set the odom scale.
+// Motor encoders read wheel slip as real distance, so expect drift under pushing
+// and after hard stops. To go back, pass &vertical as the first argument again.
+lemlib::OdomSensors sensors(nullptr, // vertical tracking wheel 1 -> left drive motors
+                            nullptr, // vertical tracking wheel 2 -> right drive motors
                             &horizontal, // horizontal tracking wheel
                             nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
                             &imu // inertial sensor

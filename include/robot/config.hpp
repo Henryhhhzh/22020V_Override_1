@@ -45,6 +45,16 @@ constexpr PositionTargets startupBasePosition = {0.0, 125.0};
 constexpr bool armHoldingEnabled = true;
 constexpr bool cascadeHoldingEnabled = true;
 
+// Drivetrain geometry. SINGLE SOURCE OF TRUTH: the lemlib::Drivetrain in
+// hardware.cpp, the Ramsete follower, and the simple_* encoder moves all read
+// these. Nothing else should hardcode a wheel size or an rpm. These were
+// previously written out separately in three places, which is how a 3.25" value
+// survived next to a 2.75" one and quietly scaled odometry wrong.
+constexpr float kTrackWidthIn = 10.6; // center of middle left wheel to middle right wheel
+constexpr float kDriveWheelDiameterIn = 2.75; // matches lemlib::Omniwheel::NEW_275
+constexpr float kDriveWheelRpm = 450.0; // wheel rpm after the external gearing
+constexpr float kMotorCartridgeRpm = 600.0; // blue cartridge
+
 // DSR wall locations
 constexpr float dsrTopWallY = 72.0; // top wall Y coordinate, in inches
 constexpr float dsrRightWallX = 72.0; // right wall X coordinate, in inches

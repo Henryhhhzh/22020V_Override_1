@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(c++ -std=c++17 -fsyntax-only -Iinclude /private/tmp/claude-501/-Users-henryhuang-Downloads-22020V-Override-1/e1fa4fda-291f-491e-a7b7-f72a66db493d/scratchpad/claw_probe.cpp)"
+    ]
+  }
+}
