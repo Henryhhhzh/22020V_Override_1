@@ -547,12 +547,10 @@ void competition_initialize() {}
  * from where it left off.
  */
 void autonomous() {
-	simple_auton();
-	    //the auton you want to run
-    // To run the five planner exports in static/ instead, call:
-    //   bot1_auton1();
-    // For the hand-written sanity-check path, call:
-    //   ramsete_auton_example();
+	// Planner-exported testing curve Ramsete test.
+	ramsete_auton_example();
+	// To run the five planner exports in static/ instead, call:
+	//   bot1_auton1();
 }
 
 /**

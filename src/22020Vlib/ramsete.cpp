@@ -10,9 +10,11 @@
 
 namespace {
 
-// Ramsete tuning. b adds aggressiveness, zeta adds damping. These two are
-// convention-independent and safe to start at these values, then tune.
-constexpr float kRamseteB = 2.0;
+// Ramsete b has units rad^2 / distance^2. Convert the usual 2.0 rad^2/m^2
+// baseline to inches because trajectory velocities and pose errors use inches.
+// Using 2.0 directly here makes position and heading corrections far too strong.
+constexpr float kMetersPerInch = 0.0254;
+constexpr float kRamseteB = 2.0 * kMetersPerInch * kMetersPerInch;
 constexpr float kRamseteZeta = 0.7;
 
 constexpr float kRamsetePi = 3.14159265358979;

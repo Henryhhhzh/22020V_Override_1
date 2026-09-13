@@ -38,9 +38,7 @@ extern pros::Imu imu;
 
 // tracking wheels
 extern pros::Rotation horizontalEnc;
-extern pros::Rotation verticalEnc;
 extern lemlib::TrackingWheel horizontal;
-extern lemlib::TrackingWheel vertical;
 
 // chassis configuration
 extern lemlib::Drivetrain drivetrain;

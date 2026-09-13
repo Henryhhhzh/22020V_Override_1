@@ -25,22 +25,15 @@ pros::adi::Pneumatics OpenClaw('F', false, true); // Inverted: retracted is phys
 // Auxiliary Rotation Sensor on port 5; not used for odometry.
 pros::Rotation armRotationSensor(-5);
 
-// Inertial sensor on placeholder port 7
-pros::Imu imu(7);
+// Inertial sensor on confirmed port 19.
+pros::Imu imu(19);
 
 // tracking wheels
-// Tracking-wheel sensor ports are placeholders until final wiring is known.
-// Horizontal tracking wheel encoder: Rotation Sensor on port 18, reversed.
-pros::Rotation horizontalEnc(-18);
-// Vertical tracking wheel encoder: Rotation Sensor on port 19, reversed.
-pros::Rotation verticalEnc(-19);
+// Horizontal Rotation Sensor on confirmed port 7. Reverse the reported
+// left-increasing raw reading so rightward travel increases the odom reading.
+pros::Rotation horizontalEnc(-7);
 // horizontal tracking wheel. 2.75" diameter, 5.75" offset, back of the robot (negative)
 lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, -4.523);
-// vertical tracking wheel. 2.75" diameter, 2.5" offset, left of the robot (negative)
-// TEMPORARILY UNUSED: see the odom sensors below, which run forward tracking off
-// the drive motor encoders instead. This object stays defined so restoring the
-// wheel is a one-line change in lemlib::OdomSensors.
-lemlib::TrackingWheel vertical(&verticalEnc, lemlib::Omniwheel::NEW_2, -0.5);
 
 // drivetrain settings
 // Geometry comes from robot/config.hpp so the Ramsete follower and the simple_*
@@ -84,7 +77,8 @@ lemlib::ControllerSettings angularController(2, // proportional gain (kP)
 // (2.75" wheel, 450 rpm, +-trackWidth/2 offset). This is why the drivetrain's
 // wheel diameter and rpm now have to be exactly right: they set the odom scale.
 // Motor encoders read wheel slip as real distance, so expect drift under pushing
-// and after hard stops. To go back, pass &vertical as the first argument again.
+// and after hard stops. To restore a vertical tracking wheel, define it on its
+// confirmed sensor port and pass it as the first argument.
 lemlib::OdomSensors sensors(nullptr, // vertical tracking wheel 1 -> left drive motors
                             nullptr, // vertical tracking wheel 2 -> right drive motors
                             &horizontal, // horizontal tracking wheel
