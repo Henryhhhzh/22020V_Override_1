@@ -32,8 +32,9 @@ pros::Imu imu(19);
 // Horizontal Rotation Sensor on confirmed port 7. Reverse the reported
 // left-increasing raw reading so rightward travel increases the odom reading.
 pros::Rotation horizontalEnc(-7);
-// horizontal tracking wheel. 2.75" diameter, 5.75" offset, back of the robot (negative)
-lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, -4.523);
+// Horizontal tracking wheel: configured as NEW_2, 12.6 cm forward of the
+// tracking center. LemLib uses inches and a positive offset for forward.
+lemlib::TrackingWheel horizontal(&horizontalEnc, lemlib::Omniwheel::NEW_2, 12.6f / 2.54f);
 
 // drivetrain settings
 // Geometry comes from robot/config.hpp so the Ramsete follower and the simple_*

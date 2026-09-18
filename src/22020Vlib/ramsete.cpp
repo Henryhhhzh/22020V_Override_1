@@ -5,21 +5,87 @@
 #include "pros/rtos.hpp"
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 namespace {
 
-// Ramsete b has units rad^2 / distance^2. Convert the usual 2.0 rad^2/m^2
-// baseline to inches because trajectory velocities and pose errors use inches.
-// Using 2.0 directly here makes position and heading corrections far too strong.
+// The V5 controller link is slow: PROS drops writes closer together than this,
+// and every attempt still takes the controller port mutex. Calling it at the
+// full control rate added jitter to the loop for four updates out of five.
+constexpr uint32_t kRamseteDisplayMs = 50;
+
+// Fixed 15-character row: A-06 L+01 H-019. Position is rounded inches; heading
+// is rounded degrees. Show overflow/invalid readings as question marks.
+//
+// A and L are robot-frame, not field-frame: A is along-track (ahead of or behind
+// the path along the robot's own heading) and L is lateral (off to its side).
+// Field X and Y would mean something different at every heading -- on a path
+// that sweeps 180 degrees they swap roles halfway through -- so they cannot be
+// read as a diagnosis. These two always can: A is follower lag, L is odometry.
+// force bypasses the rate gate for the one final snapshot at the end of a path.
+void display_ramsete_errors(float x, float y, float heading, bool force = false) {
+	static uint32_t last_print_ms = 0;
+	const uint32_t now = pros::millis();
+	if (!force && now - last_print_ms < kRamseteDisplayMs) return;
+	last_print_ms = now;
+
+	char fields[3][5];
+	const float values[] = {x, y, heading};
+	for (int i = 0; i < 3; ++i) {
+		const float rounded = std::round(values[i]);
+		const int limit = i == 2 ? 180 : 99;
+		if (!std::isfinite(rounded) || std::fabs(rounded) > limit) {
+			std::snprintf(fields[i], sizeof(fields[i]), "%s", i == 2 ? "????" : "???");
+		} else {
+			std::snprintf(fields[i], sizeof(fields[i]), i == 2 ? "%+04d" : "%+03d",
+			              static_cast<int>(rounded));
+		}
+	}
+	controller.print(0, 0, "A%s L%s H%s", fields[0], fields[1], fields[2]);
+}
+
+// Ramsete b has units rad^2 / distance^2, and the literature quotes it in
+// rad^2/m^2 with 2.0 as the usual starting point. Trajectory velocities and pose
+// errors here are in inches, so the constant has to be converted. Note that the
+// leading value below is 20.0, not 2.0: this is ten times the textbook starting
+// point. Retune by changing that leading number, not the conversion.
 constexpr float kMetersPerInch = 0.0254;
 constexpr float kRamseteB = 2.0 * kMetersPerInch * kMetersPerInch;
-constexpr float kRamseteZeta = 0.7;
+constexpr float kRamseteZeta = 0.9;
 
 constexpr float kRamsetePi = 3.14159265358979;
 constexpr int kRamseteLoopMs = 10; // 100 Hz control loop
 constexpr int kRamseteMaxLineChars = 128;
+
+// The Ramsete gain k is proportional to the trajectory's own speed, so it falls
+// to zero wherever the trajectory is stationary: every segment's first and last
+// rows, and the whole settle phase below. That is exactly where the correction
+// is needed, so floor the speed that feeds the gain. This does not change the
+// commanded velocity, only how hard the controller pulls back onto the path.
+constexpr float kRamseteMinGainSpeedIps = 10.0;
+
+// How close the robot has to get to the final row before a segment counts as
+// finished, and how long it may keep trying. The drivetrain always lags a
+// time-indexed trajectory, so stopping the moment the clock runs out ends every
+// segment short and hands that error to the next one.
+//
+// The tolerance is measured along the robot's own heading, not as a straight
+// line distance. A differential drive parked on a heading can drive forward and
+// it can rotate, but it cannot move sideways, and the one term in the control
+// law that corrects sideways error is multiplied by the trajectory velocity --
+// which is zero here. So a segment that ends with a lateral offset can never
+// close it, and testing a straight line distance would only burn the timeout
+// every time. Along-track and heading are exactly what the settle can fix.
+constexpr float kRamseteSettleAlongTrackIn = 1.0;
+constexpr float kRamseteSettleHeadingDeg = 0.5;
+constexpr float kRamseteSettleTimeoutS = 0.5;
+
+// How long turnToStart may spend aiming, and how far off it may leave the robot
+// before the segment is abandoned instead of driven.
+constexpr int kRamseteTurnTimeoutMs = 1500;
+constexpr float kRamseteStartHeadingLimitDeg = 10.0;
 
 // Half-width of the heading smoothing and differentiation window, in rows.
 // 2 means five rows, or 0.1 s at the planner's 0.02 s dt.
@@ -33,6 +99,7 @@ float ramseteThetaScratch[kRamseteMaxPoints];
 
 // Wrap an angle to [-pi, pi] so heading error never blows up across +-pi.
 float ramsete_normalize_angle(float radians) {
+	if (!std::isfinite(radians)) return 0.0; // +-inf would loop here forever
 	while (radians > kRamsetePi) radians -= 2.0 * kRamsetePi;
 	while (radians < -kRamsetePi) radians += 2.0 * kRamsetePi;
 	return radians;
@@ -75,6 +142,13 @@ float ramsete_wheel_ips_to_motor_rpm(float wheel_ips) {
 	return wheel_rpm * (kMotorCartridgeRpm / kDriveWheelRpm);
 }
 
+// Straight-line distance between a row and the one before it.
+float ramsete_row_distance(const RamsetePoint* traj, int i) {
+	const float dx = traj[i].x - traj[i - 1].x;
+	const float dy = traj[i].y - traj[i - 1].y;
+	return std::sqrt(dx * dx + dy * dy);
+}
+
 } // namespace
 
 float ramsete_heading_to_math_rad(float heading_deg) {
@@ -90,19 +164,34 @@ float ramsete_math_rad_to_heading(float math_rad) {
 	return heading;
 }
 
-// Follow a planner-exported Ramsete trajectory. Blocks until the trajectory
-// time elapses, then stops the drive. Seed odom to the path's first point first
-// (chassis.setPose(...) or a dsr() reset) so the start pose matches the path.
+// Follow a planner-exported Ramsete trajectory. Blocks until the trajectory time
+// elapses and the robot has settled onto the final row, then stops the drive.
+// Seed odom to the path's first point first (chassis.setPose(...) or a dsr()
+// reset) so the start pose matches the path.
 void follow_ramsete(const RamsetePoint* traj, int count) {
 	if (traj == nullptr || count < 2) return;
 
+	const float total_time = traj[count - 1].t;
+	const float settle_heading_rad = kRamseteSettleHeadingDeg * kRamsetePi / 180.0;
 	uint32_t start_ms = pros::millis();
+	uint32_t loop_ms = start_ms;
 
 	while (true) {
 		float t = (pros::millis() - start_ms) / 1000.0;
-		if (t >= traj[count - 1].t) break;
 
 		RamsetePoint goal = ramsete_sample(traj, count, t);
+		const bool settling = t >= total_time;
+		// Once the trajectory is over there is nothing left to feed forward, and
+		// the final row's own v and omega are whatever the rebuild happened to
+		// leave there -- circle_test_1 ends on 0.25 rad/s. Handed to the law as a
+		// feedforward that would out-pull the heading correction and quietly spin
+		// the robot for the whole settle. Drop both: the goal is now a pose to
+		// hold, so only the correction terms should act.
+		if (settling) {
+			goal.v = 0.0;
+			goal.omega = 0.0;
+		}
+
 		lemlib::Pose pose = chassis.getPose(); // x, y in inches; theta in degrees
 		float theta = ramsete_heading_to_math_rad(pose.theta);
 
@@ -115,17 +204,32 @@ void follow_ramsete(const RamsetePoint* traj, int count) {
 		float local_x = std::cos(theta) * error_x + std::sin(theta) * error_y;
 		float local_y = -std::sin(theta) * error_x + std::cos(theta) * error_y;
 
+		// Update all three errors every iteration. The controller's physical
+		// display refresh may be slower than this control loop.
+		display_ramsete_errors(local_x, local_y, -error_theta * 180.0 / kRamsetePi);
+
+		// Past the end of the trajectory ramsete_sample pins the goal to the final
+		// row, which carries v = 0, so keep running the same law against it until
+		// the robot actually arrives. Breaking on elapsed time alone would stop
+		// the segment wherever the drivetrain's lag happened to leave it.
+		if (settling) {
+			const bool arrived = std::fabs(local_x) <= kRamseteSettleAlongTrackIn &&
+			                     std::fabs(error_theta) <= settle_heading_rad;
+			if (arrived || t >= total_time + kRamseteSettleTimeoutS) break;
+		}
+
 		// Ramsete control law. sinc(error_theta) avoids the divide-by-zero as the
 		// heading error goes to 0.
-		float k = 2.0 * kRamseteZeta * std::sqrt(goal.omega * goal.omega + kRamseteB * goal.v * goal.v);
+		const float gain_v = std::fmax(std::fabs(goal.v), kRamseteMinGainSpeedIps);
+		float k = 2.0 * kRamseteZeta * std::sqrt(goal.omega * goal.omega + kRamseteB * gain_v * gain_v);
 		float sinc = std::fabs(error_theta) < 1e-6 ? 1.0 : std::sin(error_theta) / error_theta;
 		float v_cmd = goal.v * std::cos(error_theta) + k * local_x;
 		float omega_cmd = goal.omega + k * error_theta + kRamseteB * goal.v * sinc * local_y;
 
 		// Differential-drive split. omega is counter-clockwise positive, matching
 		// the math frame, so the right wheel speeds up on a left (CCW) turn.
-		float left_ips = v_cmd - (omega_cmd * kTrackWidthIn / 2.0);
-		float right_ips = v_cmd + (omega_cmd * kTrackWidthIn / 2.0);
+		float left_ips = v_cmd - (omega_cmd * kRamseteEffectiveTrackWidthIn / 2.0);
+		float right_ips = v_cmd + (omega_cmd * kRamseteEffectiveTrackWidthIn / 2.0);
 
 		float left_rpm = ramsete_wheel_ips_to_motor_rpm(left_ips);
 		float right_rpm = ramsete_wheel_ips_to_motor_rpm(right_ips);
@@ -140,16 +244,37 @@ void follow_ramsete(const RamsetePoint* traj, int count) {
 			right_rpm *= scale;
 		}
 
-		leftMotors.move_velocity(static_cast<int>(left_rpm));
-		rightMotors.move_velocity(static_cast<int>(right_rpm));
+		// Round rather than truncate: a cast rounds toward zero, which leaves both
+		// wheels commanded systematically slow every single iteration.
+		leftMotors.move_velocity(static_cast<std::int32_t>(std::lround(left_rpm)));
+		rightMotors.move_velocity(static_cast<std::int32_t>(std::lround(right_rpm)));
 
-		pros::delay(kRamseteLoopMs);
+		// delay_until holds a true 100 Hz period. Plain delay() adds the loop's own
+		// compute time on top of the delay and makes the interval uneven.
+		pros::Task::delay_until(&loop_ms, kRamseteLoopMs);
 	}
 
-	// brake() holds position; move_velocity(0) would coast to a stop and let the
-	// robot drift past the end of the segment before the next one starts.
+	// brake() applies whatever brake mode the motors are set to, and PROS defaults
+	// that to coast -- initialize() sets both drive groups to brake so this
+	// actually stops. move_velocity(0) would coast regardless and let the robot
+	// drift past the end of the segment before the next one starts.
 	leftMotors.brake();
 	rightMotors.brake();
+
+	// Show one consistent final endpoint snapshot when the path ends.
+	// These remain visible until the next path or driver display replaces them.
+	const lemlib::Pose final_pose = chassis.getPose();
+	const RamsetePoint& endpoint = traj[count - 1];
+	const float final_theta = ramsete_heading_to_math_rad(final_pose.theta);
+	const float final_error_x = endpoint.x - final_pose.x;
+	const float final_error_y = endpoint.y - final_pose.y;
+	const float final_along =
+	    std::cos(final_theta) * final_error_x + std::sin(final_theta) * final_error_y;
+	const float final_lateral =
+	    -std::sin(final_theta) * final_error_x + std::cos(final_theta) * final_error_y;
+	const float final_heading_error =
+	    -ramsete_normalize_angle(endpoint.theta - final_theta) * 180.0 / kRamsetePi;
+	display_ramsete_errors(final_along, final_lateral, final_heading_error, true);
 }
 
 int ramsete_parse(const asset& file, RamsetePoint* out, int capacity) {
@@ -199,6 +324,54 @@ int ramsete_parse(const asset& file, RamsetePoint* out, int capacity) {
 	}
 
 	return count;
+}
+
+// path.jerryio exports its velocity column with no acceleration limit at all.
+// These files step v by up to 675 in/s^2, or 17 m/s^2, between consecutive rows;
+// a VEX drivetrain does a small fraction of that. Because follow_ramsete indexes
+// the trajectory by wall-clock time, the robot falls behind inside the first
+// tenth of a second of every segment and the goal point never comes back, so the
+// rest of the path gets driven as a chase instead of as a feedforward.
+//
+// Re-space the timestamps so the same geometric path is asked for at a speed the
+// drive can actually reach. x and y are never touched, so the shape of the path
+// is exactly what the planner drew; only the speed along it and the time each
+// row is due change. On the current exports this costs 2-3% more time.
+void ramsete_retime(RamsetePoint* traj, int count) {
+	if (count < 2) return;
+
+	// Forward pass: no row may be faster than the one before it plus whatever the
+	// drive can gain over the distance between them. Scale the velocity rather
+	// than assign it, so a reversing path keeps its sign and a stationary row
+	// stays at zero instead of picking up a direction it never had.
+	for (int i = 1; i < count; i++) {
+		const float ds = ramsete_row_distance(traj, i);
+		const float reachable = std::sqrt(traj[i - 1].v * traj[i - 1].v +
+		                                  2.0 * kRamseteMaxAccelIps2 * ds);
+		const float speed = std::fabs(traj[i].v);
+		if (speed > reachable) traj[i].v *= reachable / speed;
+	}
+
+	// Backward pass: the same limit read as braking, so the profile arrives at
+	// each row already slow enough to make the one after it.
+	for (int i = count - 2; i >= 0; i--) {
+		const float ds = ramsete_row_distance(traj, i + 1);
+		const float reachable = std::sqrt(traj[i + 1].v * traj[i + 1].v +
+		                                  2.0 * kRamseteMaxAccelIps2 * ds);
+		const float speed = std::fabs(traj[i].v);
+		if (speed > reachable) traj[i].v *= reachable / speed;
+	}
+
+	// Re-integrate the timestamps from the distances and the new speeds: a row is
+	// due once the mean speed across the gap has covered it. Two stationary rows
+	// in a row sit on top of each other, so there is no distance to cover and no
+	// time to add.
+	traj[0].t = 0.0;
+	for (int i = 1; i < count; i++) {
+		const float ds = ramsete_row_distance(traj, i);
+		const float mean = (std::fabs(traj[i - 1].v) + std::fabs(traj[i].v)) / 2.0;
+		traj[i].t = traj[i - 1].t + (mean > 1e-4 ? ds / mean : 0.0);
+	}
 }
 
 // path.jerryio does not export theta and omega as a usable feedforward. It holds
@@ -275,14 +448,30 @@ void ramsete_rebuild_heading(RamsetePoint* traj, int count) {
 bool follow_ramsete_asset(const asset& file, RamseteStart start) {
 	const int count = ramsete_parse(file, ramseteBuffer, kRamseteMaxPoints);
 	if (count < 2) return false;
+	// A full buffer means the decode stopped at the cap rather than at the end of
+	// the file. Refuse it: following a silently truncated path drives the robot
+	// part way down it and then stops mid-field.
+	if (count >= kRamseteMaxPoints) return false;
+
+	// Re-time before rebuilding the heading, not after. ramsete_rebuild_heading
+	// differentiates theta against the timestamps, so it has to see the final ones.
+	ramsete_retime(ramseteBuffer, count);
 	ramsete_rebuild_heading(ramseteBuffer, count);
 
 	const float startHeading = ramsete_math_rad_to_heading(ramseteBuffer[0].theta);
 	if (start == RamseteStart::seedPose) {
 		chassis.setPose(ramseteBuffer[0].x, ramseteBuffer[0].y, startHeading);
 	} else if (start == RamseteStart::turnToStart) {
-		chassis.turnToHeading(startHeading, 1500);
+		chassis.turnToHeading(startHeading, kRamseteTurnTimeoutMs);
 		chassis.waitUntilDone();
+		// waitUntilDone returns on the timeout just as readily as on a settled
+		// turn, so check where the turn actually left the robot. A few degrees the
+		// follower absorbs on its own; a turn that barely moved would mean driving
+		// the whole segment sideways, so abandon it instead.
+		const float residual = std::fabs(ramsete_normalize_angle(
+		    ramsete_heading_to_math_rad(startHeading) -
+		    ramsete_heading_to_math_rad(chassis.getPose().theta)));
+		if (residual > kRamseteStartHeadingLimitDeg * kRamsetePi / 180.0) return false;
 	}
 
 	follow_ramsete(ramseteBuffer, count);

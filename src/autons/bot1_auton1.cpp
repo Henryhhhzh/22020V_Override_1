@@ -6,11 +6,11 @@
 
 // The five segments this routine drives. ASSET() embeds a file from static/
 // into the binary; the symbol is the filename with every '.' replaced by '_'.
-ASSET(bot1_auton1_part1_ramsete_txt);
-ASSET(bot1_auton1_part2_ramsete_txt);
-ASSET(bot1_auton1_part3_ramsete_txt);
-ASSET(bot1_auton1_part4_ramsete_txt);
-ASSET(bot1_auton1_part5_ramsete_txt);
+ASSET(bot_1_auton1_bot1_auton1_part1_ramsete_txt);
+ASSET(bot_1_auton1_bot1_auton1_part2_ramsete_txt);
+ASSET(bot_1_auton1_bot1_auton1_part3_ramsete_txt);
+ASSET(bot_1_auton1_bot1_auton1_part4_ramsete_txt);
+ASSET(bot_1_auton1_bot1_auton1_part5_ramsete_txt);
 
 // Bot 1's first routine, driven from the five planner exports in static/.
 //
@@ -27,9 +27,9 @@ ASSET(bot1_auton1_part5_ramsete_txt);
 // Only two joins actually need a turn. Parts 1->2 and 4->5 already line up to
 // within a degree, so turning there would just waste time and add error.
 void bot1_auton1() {
-	follow_ramsete_asset(bot1_auton1_part1_ramsete_txt, RamseteStart::seedPose);
-	follow_ramsete_asset(bot1_auton1_part2_ramsete_txt, RamseteStart::asIs);
-	follow_ramsete_asset(bot1_auton1_part3_ramsete_txt, RamseteStart::turnToStart);
-	follow_ramsete_asset(bot1_auton1_part4_ramsete_txt, RamseteStart::turnToStart);
-	follow_ramsete_asset(bot1_auton1_part5_ramsete_txt, RamseteStart::asIs);
+	follow_ramsete_asset(bot_1_auton1_bot1_auton1_part1_ramsete_txt, RamseteStart::seedPose);
+	follow_ramsete_asset(bot_1_auton1_bot1_auton1_part2_ramsete_txt, RamseteStart::asIs);
+	follow_ramsete_asset(bot_1_auton1_bot1_auton1_part3_ramsete_txt, RamseteStart::turnToStart);
+	follow_ramsete_asset(bot_1_auton1_bot1_auton1_part4_ramsete_txt, RamseteStart::turnToStart);
+	follow_ramsete_asset(bot_1_auton1_bot1_auton1_part5_ramsete_txt, RamseteStart::asIs);
 }

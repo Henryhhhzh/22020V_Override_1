@@ -17,8 +17,10 @@ void simple_auton();
 // Bot 1's first routine, driven from the five planner exports in static/.
 void bot1_auton1();
 
-// A hand-written 24-inch forward path. Sanity check for the follower itself
-// rather than a competition routine.
+// Four numbered planner paths in static/auton_26_september/.
+void auton_26_september();
+
+// Two-part circle test from static/circle_test/.
 void ramsete_auton_example();
 
 // Empty placeholders.

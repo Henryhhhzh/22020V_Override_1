@@ -55,6 +55,23 @@ constexpr float kDriveWheelDiameterIn = 2.75; // matches lemlib::Omniwheel::NEW_
 constexpr float kDriveWheelRpm = 450.0; // wheel rpm after the external gearing
 constexpr float kMotorCartridgeRpm = 600.0; // blue cartridge
 
+// TUNE THIS: the track width the Ramsete follower splits a turn rate across to
+// get left and right wheel speeds. It starts at the measured kTrackWidthIn, but
+// omni wheels scrub sideways through a turn, so the width that actually produces
+// the commanded rotation is usually a few percent larger than the measured one.
+// Raise it if the robot consistently under-rotates on curves. Odometry does not
+// read this, so changing it cannot move the reported pose.
+constexpr float kRamseteEffectiveTrackWidthIn = kTrackWidthIn;
+
+// TUNE THIS: the largest linear acceleration the drivetrain can really produce,
+// in inches per second squared. The planner exports its velocity column with no
+// acceleration limit at all -- the current files step v by up to 675 in/s^2, or
+// 17 m/s^2 -- so every trajectory is re-timed against this number as it loads.
+// Set it too high and the robot falls behind its own trajectory in the first
+// tenth of a second; too low and every path is slower than it needs to be.
+// 150 in/s^2 is about 3.8 m/s^2, and costs the current paths 2-3% more time.
+constexpr float kRamseteMaxAccelIps2 = 150.0;
+
 // DSR wall locations
 constexpr float dsrTopWallY = 72.0; // top wall Y coordinate, in inches
 constexpr float dsrRightWallX = 72.0; // right wall X coordinate, in inches

@@ -50,6 +50,13 @@ void initialize() {
 	// the robot must be still for all of it.
 	chassis.calibrate();
 
+	// PROS motors default to coast, and MotorGroup::brake() only ever applies
+	// whatever brake mode is already set. Without this the Ramsete follower's
+	// brake() at the end of each segment coasts, and the robot drifts past the
+	// endpoint before the next segment picks up from it.
+	leftMotors.set_brake_mode_all(pros::MotorBrake::brake);
+	rightMotors.set_brake_mode_all(pros::MotorBrake::brake);
+
 	// The physical startup pose is the sensor origin: arm 0, cascade 0.
 	// The controller then moves both mechanisms to startupBasePosition.
 	// Targets are not wrapped, so values such as 400 degrees remain valid.
@@ -547,8 +554,8 @@ void competition_initialize() {}
  * from where it left off.
  */
 void autonomous() {
-	// Planner-exported testing curve Ramsete test.
-	ramsete_auton_example();
+	// Run the two-part circle Ramsete test.
+	simple_auton();
 	// To run the five planner exports in static/ instead, call:
 	//   bot1_auton1();
 }

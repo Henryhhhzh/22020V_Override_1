@@ -37,19 +37,29 @@ enum class RamseteStart {
 	asIs // The previous segment already left the robot on this heading.
 };
 
-// Decode an embedded export, repair its heading columns, enter it, and follow it.
-// Returns false if the asset did not decode, which means the segment was skipped
-// rather than driven blind.
+// Decode an embedded export, make its velocity profile reachable, repair its
+// heading columns, enter it, and follow it. Returns false when the segment was
+// skipped rather than driven blind: the asset did not decode, it was long enough
+// to hit kRamseteMaxPoints and so may be truncated, or turnToStart could not get
+// the robot near the heading the segment starts on.
 bool follow_ramsete_asset(const asset& file, RamseteStart start);
 
-// Follow a trajectory already in memory. Blocks until the trajectory time
-// elapses, then brakes. Odom must already be seeded to the path's first point.
+// Follow a trajectory already in memory. Blocks until the trajectory time elapses
+// and the robot has settled onto the final row, or the settle times out, then
+// brakes. Odom must already be seeded to the path's first point.
 void follow_ramsete(const RamsetePoint* traj, int count);
 
 // Read an embedded export into out[]. Rows are "t, x, y, theta, v, omega";
 // '#' comment lines, blank lines, and the trailing "endData" marker are skipped.
 // Returns how many rows were decoded.
 int ramsete_parse(const asset& file, RamsetePoint* out, int capacity);
+
+// Re-space the timestamps so the velocity profile never asks for more
+// acceleration than kRamseteMaxAccelIps2. x and y are untouched, so the path
+// keeps its exact shape. Must run before ramsete_rebuild_heading, which
+// differentiates against these timestamps. follow_ramsete_asset() already does
+// this, so call it directly only when inspecting a trajectory by hand.
+void ramsete_retime(RamsetePoint* traj, int count);
 
 // Rebuild the theta and omega columns from the path tangent. The planner's own
 // values are unusable as feedforward; see the comment on the definition.
