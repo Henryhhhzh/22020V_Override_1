@@ -23,9 +23,8 @@ USE_PACKAGE:=1
 # EXCLUDE_COLD_LIBRARIES:= $(FWDIR)/your_library.a
 EXCLUDE_COLD_LIBRARIES:= 
 
-# Arm and cascade control currently live in main.cpp. Keep the unfinished
-# modular copies without compiling them twice and causing duplicate symbols.
-EXCLUDE_SRCDIRS+=$(SRCDIR)/robot/arm.cpp $(SRCDIR)/robot/cascade.cpp
+# Retired mechanism code lives in legacy/cascade_1/, outside SRCDIR, and is
+# automatically excluded from the active robot build.
 
 # Set this to 1 to add additional rules to compile your project as a PROS library template
 IS_LIBRARY:=0

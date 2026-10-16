@@ -1,0 +1,174 @@
+DRIVER INSTRUCTIONS - LIFT AND CLAW ROBOT
+========================================
+Current controls and settings. Angles below are MOTOR encoder degrees,
+not the physical lift angle after external gearing.
+
+QUICK CONTROLS
+--------------
+Left stick up/down : Drive forward/backward.
+Right stick left/right : Steer.
+L1 - HOLD : Raise the lift. Release to hold its position.
+L2 - HOLD : Lower slowly for scoring. Release to open the claw and start
+            the scoring wait/automatic return described below.
+R2 - CLICK : Toggle the claw. One click opens; the next click closes.
+             Releasing R2 does nothing.
+R1 - CLICK : Reset the lift to its current minimum. The return continues
+             after releasing R1. This does NOT recalibrate encoder zero.
+
+BEFORE STARTING THE PROGRAM
+---------------------------
+1. Place the lift at its physical bottom before starting/restarting the program.
+   The program records this starting position as 0 degrees; it does not home
+   the lift automatically. Do not restart with the lift raised.
+2. Keep the robot still while the IMU calibrates, roughly three seconds.
+3. Startup closes the claw for the preload and records it as CLOSED.
+   The first R2 click therefore OPENS the claw.
+4. When driver control starts, the closed preload is raised to the 10-degree
+   clearance minimum. Opening the claw near the floor allows a return to zero.
+
+LIFT MINIMUM AND GROUND CLEARANCE
+--------------------------------
+Claw CLOSED : Minimum is 10 degrees above encoder zero.
+Claw OPEN   : Minimum is 0 degrees.
+Upper limit : Currently 100 degrees (a placeholder to tune for the real lift).
+
+All downward movements and R1 reset respect the current minimum.
+Closing the claw below 10 degrees raises the lift to 10 degrees.
+Closing it above 10 degrees holds the current height; it does not pull the
+lift down or add another 10 degrees. Repeated toggles do not stack height.
+
+Opening manually near the floor returns the lift to zero only when BOTH
+motor encoders are within 20 degrees of zero. Opening high up does not
+automatically drop the lift.
+
+SCORING WITH L2
+---------------
+1. Use L1 to raise the lift to the height you need, then release L1.
+   The lift uses the built-in PROS HOLD brake.
+2. Hold L2 to lower slowly toward the score. Release when positioned.
+3. Releasing L2 opens the claw ONCE and holds the lift where it stopped.
+   An R2 click in that same control-loop iteration takes priority over the
+   automatic opening; the scoring wait still starts normally.
+4. Wait at least 250 milliseconds for the claw, then drive away at least
+   3 inches (about 7.6 cm) from where L2 was released. Moving away during
+   that brief delay also counts, but lowering waits for the delay to finish.
+5. The lift automatically returns at normal speed to the current minimum:
+   0 degrees if open, or 10 degrees if you have closed the claw again.
+
+Pull-away detection requires throttle input AND measured translation.
+Turning in place alone does not count. Pushing the stick while the robot
+is blocked does not count unless odometry reports the required distance.
+If no pull-away is detected, the lift keeps holding.
+
+You may toggle R2 during the scoring wait. It does not cancel or restart
+the wait and does not move a lift held above the clearance minimum.
+Reclosing below the minimum raises only to the clearance height.
+
+RESET AND INTERRUPTING A SEQUENCE
+--------------------------------
+R1 cancels the pending lift sequence and returns directly to the current
+minimum, without opening or closing the claw:
+  Closed claw -> 10 degrees.
+  Open claw   -> 0 degrees.
+
+Holding R1 gives reset priority over L1/L2. After releasing R1, holding L1
+or L2 interrupts the reset. L1 or another L2 press also interrupts the
+scoring wait/automatic return. If L1 and L2 are held together, L1 wins.
+Disabling the robot cancels pending lift sequences.
+
+BRAIN DISPLAY
+--------------
+The Brain shows "Lift: ... motor deg", the average of both lift encoders.
+Travel limits check each encoder individually, not just the average.
+"Lift: encoder error" means a lift encoder reading is unavailable.
+
+CURRENT SETUP NOTES
+-------------------
+Lift up / normal return : 100 RPM, red cartridges.
+Slow scoring lower     : 60 RPM.
+Claw                   : ADI F; R2 toggle.
+Lift motor ports       : 4 and 5 are still labelled as placeholders.
+
+Tuning and button assignments are in include/robot/config.hpp:
+  liftUpperLimitDegrees       : upper limit (currently 100).
+  liftClawPickupDegrees       : closed-claw clearance (currently 10).
+  liftClawReturnMaxDegrees    : near-floor return band, automatically 2x clearance.
+  liftDownSlowVelocityRpm     : held-L2 speed (currently 60).
+  liftUpVelocityRpm           : up and normal return speed (currently 100).
+  liftClawOpenWaitMs          : minimum scoring delay (currently 250).
+  liftPullAwayDistanceIn      : required drive-away distance (currently 3).
+
+AUTONOMOUS - FIRST-PASS SIMPLE ROUTINE
+------------------------------------
+simple_auton() is currently selected in src/main.cpp. It closes the preload
+claw, raises the new lift, follows the old encoder drive/turn sequence, lowers
+to its placement height, and opens the claw. It holds the lift through the
+turn and 20-inch drive away, then returns to the current minimum and finishes
+the final turn. A failed lift move, drive, turn, or wall-contact step stops
+the remaining sequence. A failed drive-away leaves the lift held up.
+
+First-pass positions in include/robot/config.hpp:
+  simpleAutonLiftRaisedDegrees  : currently the upper limit, 100 motor degrees.
+  simpleAutonLiftReleaseDegrees : currently 70% of the range, 70 motor degrees.
+  simpleAutonLiftTimeoutMs      : 2000 ms per lift move.
+These are trial positions for the rebuilt robot; check them physically before
+using the routine in a match. The old cascade/arm version remains archived.
+
+The encoder drive helpers preserve encoder zero and units, so odometry and
+driver scoring pull-away detection can continue after this routine. Distances
+and turns are still measured using drive motor encoders: wheel slip can cause
+position error. Ramsete and DSR implementations have not been changed.
+
+WHERE TO CHANGE PORTS AND TUNE THE ROBOT
+--------------------------------------
+PORTS, MOTOR DIRECTION, AND CARTRIDGES -> src/robot/hardware.cpp
+Edit the existing device definitions here; do not create a second copy.
+
+  liftMotors({4, 5}, pros::MotorGearset::red)
+    Change 4 and 5 to the two lift motor ports.
+    A negative port reverses that motor: {4, -5} reverses only motor 5.
+    Set reversal so BOTH encoders increase when the lift rises.
+    Keep red for the current 100 RPM cartridges; use the actual cartridge type.
+
+  leftMotors({1, -2, -3}, pros::MotorGearset::blue)
+  rightMotors({-10, 9, 8}, pros::MotorGearset::blue)
+    These are the drivetrain ports and motor directions.
+
+  OpenClaw('F', false, true)
+    Change 'F' for the claw's three-wire ADI port letter.
+    The existing flags start logically retracted and invert the output so
+    retracted means physically CLOSED. Keep that closed/open mapping correct
+    for preload startup and the lift's raised minimum.
+
+  imu(19) / horizontalEnc(-7)
+    These set the IMU port and horizontal rotation-sensor port/direction.
+    Each smart device needs its own port; avoid duplicate assignments.
+
+DECLARATIONS -> include/robot/hardware.hpp
+  This file exposes the existing devices to other source files.
+  Changing a port does NOT require changing its extern declaration here.
+  Add a matching extern only when adding a new named hardware object.
+
+LIFT TUNING AND BUTTONS -> include/robot/config.hpp
+  Use the lift settings listed in CURRENT SETUP NOTES above.
+  Change liftUpButton, liftDownButton, liftResetButton, or
+  openClawToggleButton to remap the driver controls.
+  Keep liftClawPickupDegrees below the upper limit and the slow lowering
+  speed below the normal lift speed. Angles are motor degrees; speeds are RPM.
+
+MECHANISM BEHAVIOR
+  src/robot/lift.cpp : Raising, scoring, pickup clearance, and reset logic.
+  src/robot/claw.cpp : Claw toggle and its connection to pickup assistance.
+  src/main.cpp      : Startup, Brain display, driver loop, and auton selection.
+
+DRIVETRAIN AND PATH TUNING
+  include/robot/config.hpp : Wheel diameter/RPM, track width, Ramsete effective
+                            track width and acceleration limit, DSR settings.
+  src/robot/hardware.cpp  : LemLib linear/angular controllers and tracking-wheel
+                           diameter/offset. Offsets are in inches.
+  src/22020Vlib/ramsete.cpp : Custom Ramsete follower gains. Preserve the existing
+                            inch conversion when adjusting its B gain.
+
+After any code or port change, BUILD AND UPLOAD through PROS. Saving a file
+alone does not update the robot. Keep the lift lowered when restarting so
+the program records the correct encoder zero.

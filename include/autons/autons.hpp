@@ -10,8 +10,7 @@
 // at the top of that file, and add one line here. The PROS build compiles
 // everything under src/ automatically, so there is no Makefile change.
 
-// Encoder-only opening routine. Uses no odometry, so it runs even when
-// tracking is untrustworthy.
+// Restored encoder drive sequence with the rebuilt lift and main claw.
 void simple_auton();
 
 // Bot 1's first routine, driven from the five planner exports in static/.
@@ -22,7 +21,3 @@ void auton_26_september();
 
 // Two-part circle test from static/circle_test/.
 void ramsete_auton_example();
-
-// Empty placeholders.
-void example_auton();
-void example_auton2();

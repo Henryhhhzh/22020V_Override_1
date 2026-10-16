@@ -12,18 +12,12 @@ pros::Controller controller(pros::E_CONTROLLER_MASTER);
 pros::MotorGroup leftMotors({1, -2, -3}, pros::MotorGearset::blue); // left drive motors, reversed
 pros::MotorGroup rightMotors({-10, 9, 8}, pros::MotorGearset::blue); // right drive motors
 
-// individual mechanism motors
-pros::Motor armMotor(4); // normal direction; arm sensor remains reversed
-pros::Motor cascadeMotor(-20);
-pros::Motor intakeMotor(11);
+// Lift motors: placeholder ports 4 and 5, using red (100 rpm) cartridges.
+// Update ports, reversal signs, and gearing to match the new lift hardware.
+pros::MotorGroup liftMotors({4, 5}, pros::MotorGearset::red);
 
-// Double-acting pneumatic valves on the V5 brain's three-wire ADI ports.
-// Both start retracted; extend() and retract() switch their two positions.
-pros::adi::Pneumatics VariableClaw('H', false);
+// Main claw on ADI F: start CLOSED for the preload (logical retracted).
 pros::adi::Pneumatics OpenClaw('F', false, true); // Inverted: retracted is physically closed.
-
-// Auxiliary Rotation Sensor on port 5; not used for odometry.
-pros::Rotation armRotationSensor(-5);
 
 // Inertial sensor on confirmed port 19.
 pros::Imu imu(19);

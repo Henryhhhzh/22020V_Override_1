@@ -1,7 +1,6 @@
 #pragma once
 
 #include "pros/misc.h"
-#include <cstdint>
 
 // Shared types and every tunable constant for the robot. This header holds no
 // state: only types, ports-adjacent settings, and numbers you are expected to
@@ -29,21 +28,6 @@ struct DsrSensorConfig {
 	DsrSensorConfig(float heading_offset, float x_offset, float y_offset)
 	    : heading_offset(heading_offset), x_offset(x_offset), y_offset(y_offset) {}
 };
-
-// One mechanism position is always written as {arm degrees, cascade degrees}.
-struct PositionTargets {
-	double armDegrees;
-	double cascadeDegrees;
-};
-
-// TUNE THESE: target reached immediately after the sensors are zeroed at startup.
-// Position 1 and the reset button use this same base position.
-constexpr PositionTargets startupBasePosition = {0.0, 125.0};
-
-// true: active position correction + hold brake
-// false: no position correction + coast brake (manual control only)
-constexpr bool armHoldingEnabled = true;
-constexpr bool cascadeHoldingEnabled = true;
 
 // Drivetrain geometry. SINGLE SOURCE OF TRUTH: the lemlib::Drivetrain in
 // hardware.cpp, the Ramsete follower, and the simple_* encoder moves all read
@@ -82,42 +66,38 @@ constexpr float dsrLeftWallX = -72.0; // left wall X coordinate, in inches
 constexpr float dsrMinValidDistance = 0.5; // minimum valid distance sensor reading, in inches
 constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor reading, in inches
 
-// Mechanism tolerances, loop timing, and travel limits
-constexpr double cascadeTargetToleranceDegrees = 25.0;
-constexpr std::int32_t armTargetToleranceCentidegrees = 500;
-constexpr std::uint32_t mechanismSettleTimeMs = 100;
-constexpr std::uint32_t mechanismLoopMs = 10;
-constexpr double armMinimumDegrees = 0.0;
-constexpr double armMaximumDegrees = 120.0;
-constexpr double cascadeMinimumDegrees = 0.0;
-constexpr double cascadeMaximumDegrees = 1500.0;
-constexpr std::int32_t armMinimumCentidegrees = 0;
-constexpr std::int32_t armMaximumCentidegrees = 10000;
-constexpr std::int32_t armZeroRestBandCentidegrees = 200;
-
-// Array index 0 is position 1; array index 5 is position 6.
-constexpr PositionTargets positions[6] = {
-	{startupBasePosition.armDegrees, startupBasePosition.cascadeDegrees}, // position 1 / reset
-	{0, 1200.0}, // position 3
-	{110.0, 0.0},   // position 4
-	{110.0, 1000.0},// position 5
-	{110.0, 1000.0},// position 6
-	{110.0, 1000.0}
-
-};
-
-// Driver control button map
-constexpr auto nextPositionButton = pros::E_CONTROLLER_DIGITAL_Y;
-constexpr auto positionOneButton = pros::E_CONTROLLER_DIGITAL_R1;
-constexpr auto armManualUpButton = pros::E_CONTROLLER_DIGITAL_LEFT;
-constexpr auto armManualDownButton = pros::E_CONTROLLER_DIGITAL_UP;
-constexpr std::int32_t armManualSpeed = 75;
-constexpr auto cascadeDropButton = pros::E_CONTROLLER_DIGITAL_RIGHT;
+// Main claw driver control.
 constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_R2;
-constexpr auto variableClawToggleButton = pros::E_CONTROLLER_DIGITAL_Y;
-constexpr auto cascadeManualUpButton = pros::E_CONTROLLER_DIGITAL_L1;
-constexpr auto cascadeManualDownButton = pros::E_CONTROLLER_DIGITAL_L2;
-constexpr std::int32_t cascadeManualSpeed = 127;
-constexpr auto outtakeButton = pros::E_CONTROLLER_DIGITAL_B;
-constexpr std::int32_t outtakeSpeed = -127;
-constexpr double clawCloseCascadeLiftDegrees = 150.0;
+
+// Lift travel limits in MOTOR encoder degrees, with the lift lowered at startup.
+constexpr double liftLowerLimitDegrees = 0.0;
+// CHANGE THIS: 100 degrees is a placeholder. Set the new lift's real upper limit.
+constexpr double liftUpperLimitDegrees = 100.0;
+constexpr auto liftUpButton = pros::E_CONTROLLER_DIGITAL_L1;
+constexpr int liftUpVelocityRpm = 100; // Red cartridges: maximum 100 rpm.
+constexpr auto liftDownButton = pros::E_CONTROLLER_DIGITAL_L2;
+constexpr int liftDownSlowVelocityRpm = 60; // CHAGE THIS to tune held-button lowering.
+constexpr unsigned int liftClawOpenWaitMs = 250; // Minimum claw opening time.
+constexpr float liftPullAwayDistanceIn = 3.0; // Actual translation before auto-lowering.
+constexpr int liftPullAwayJoystickDeadband = 15; // Ignore small throttle-stick inputs.
+// CHANGE THIS: fixed clearance above zero whenever the claw is CLOSED.
+// Every lowering/reset command respects this floor; it is not a relative nudge.
+constexpr double liftClawPickupDegrees = 10.0; // Motor encoder degrees.
+// Return on the next manual OPEN click only within twice the pickup amount above the bottom.
+constexpr double liftClawReturnMaxDegrees = liftLowerLimitDegrees + 2.0 * liftClawPickupDegrees;
+constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_R1; // Return to current floor; does not re-zero encoders.
+static_assert(liftUpperLimitDegrees > liftLowerLimitDegrees);
+static_assert(liftUpVelocityRpm > 0 && liftUpVelocityRpm <= 100);
+static_assert(liftDownSlowVelocityRpm > 0 && liftDownSlowVelocityRpm < liftUpVelocityRpm);
+static_assert(liftPullAwayDistanceIn > 0.0);
+static_assert(liftClawPickupDegrees > 0.0);
+static_assert(liftLowerLimitDegrees + liftClawPickupDegrees < liftUpperLimitDegrees);
+
+// First-pass lift positions for the restored simple auton. CHANGE THESE after
+// testing the rebuilt robot; the old 500/350 cascade targets do not transfer.
+constexpr double simpleAutonLiftRaisedDegrees = liftUpperLimitDegrees;
+constexpr double simpleAutonLiftReleaseDegrees =
+    liftLowerLimitDegrees + 0.7 * (liftUpperLimitDegrees - liftLowerLimitDegrees);
+constexpr unsigned int simpleAutonLiftTimeoutMs = 2000;
+constexpr double liftMoveToleranceDegrees = 2.0;
+constexpr unsigned int liftMoveSettleMs = 100;

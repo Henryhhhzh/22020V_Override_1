@@ -20,18 +20,10 @@ extern pros::Controller controller;
 // motor groups
 extern pros::MotorGroup leftMotors;
 extern pros::MotorGroup rightMotors;
+extern pros::MotorGroup liftMotors;
 
-// individual mechanism motors
-extern pros::Motor armMotor;
-extern pros::Motor cascadeMotor;
-extern pros::Motor intakeMotor;
-
-// Double-acting pneumatic valves on the V5 brain's three-wire ADI ports.
-extern pros::adi::Pneumatics VariableClaw;
+// Main claw pneumatic on ADI F.
 extern pros::adi::Pneumatics OpenClaw;
-
-// Auxiliary Rotation Sensor on port 5; not used for odometry.
-extern pros::Rotation armRotationSensor;
 
 // Inertial sensor
 extern pros::Imu imu;
