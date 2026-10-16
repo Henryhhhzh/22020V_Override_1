@@ -77,6 +77,8 @@ constexpr auto liftUpButton = pros::E_CONTROLLER_DIGITAL_L1;
 constexpr int liftUpVelocityRpm = 100; // Red cartridges: maximum 100 rpm.
 constexpr auto liftDownButton = pros::E_CONTROLLER_DIGITAL_L2;
 constexpr int liftDownSlowVelocityRpm = 60; // CHAGE THIS to tune held-button lowering.
+constexpr auto liftManualDownButton = pros::E_CONTROLLER_DIGITAL_DOWN;
+constexpr int liftManualDownVelocityRpm = 60; // Plain held-button lowering speed.
 constexpr unsigned int liftClawOpenWaitMs = 250; // Minimum claw opening time.
 constexpr float liftPullAwayDistanceIn = 3.0; // Actual translation before auto-lowering.
 constexpr int liftPullAwayJoystickDeadband = 15; // Ignore small throttle-stick inputs.
@@ -89,6 +91,7 @@ constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_R1; // Return to cur
 static_assert(liftUpperLimitDegrees > liftLowerLimitDegrees);
 static_assert(liftUpVelocityRpm > 0 && liftUpVelocityRpm <= 100);
 static_assert(liftDownSlowVelocityRpm > 0 && liftDownSlowVelocityRpm < liftUpVelocityRpm);
+static_assert(liftManualDownVelocityRpm > 0 && liftManualDownVelocityRpm <= 100);
 static_assert(liftPullAwayDistanceIn > 0.0);
 static_assert(liftClawPickupDegrees > 0.0);
 static_assert(liftLowerLimitDegrees + liftClawPickupDegrees < liftUpperLimitDegrees);

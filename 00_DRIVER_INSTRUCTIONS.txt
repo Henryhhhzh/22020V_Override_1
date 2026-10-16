@@ -10,6 +10,9 @@ Right stick left/right : Steer.
 L1 - HOLD : Raise the lift. Release to hold its position.
 L2 - HOLD : Lower slowly for scoring. Release to open the claw and start
             the scoring wait/automatic return described below.
+D-pad Down - HOLD : Lower manually at 60 RPM. Release to HOLD immediately.
+                   Respects the current minimum and cancels scoring sequences.
+                   Does not trigger claw opening or an automatic return.
 R2 - CLICK : Toggle the claw. One click opens; the next click closes.
              Releasing R2 does nothing.
 R1 - CLICK : Reset the lift to its current minimum. The return continues
@@ -71,9 +74,10 @@ minimum, without opening or closing the claw:
   Closed claw -> 10 degrees.
   Open claw   -> 0 degrees.
 
-Holding R1 gives reset priority over L1/L2. After releasing R1, holding L1
-or L2 interrupts the reset. L1 or another L2 press also interrupts the
-scoring wait/automatic return. If L1 and L2 are held together, L1 wins.
+Holding R1 gives reset priority over the other lift controls. After releasing
+R1, holding L1, L2, or D-pad Down interrupts the reset. These controls also
+interrupt the scoring wait/automatic return. L1 wins over either down control;
+D-pad Down wins over L2.
 Disabling the robot cancels pending lift sequences.
 
 BRAIN DISPLAY
@@ -86,6 +90,7 @@ CURRENT SETUP NOTES
 -------------------
 Lift up / normal return : 100 RPM, red cartridges.
 Slow scoring lower     : 60 RPM.
+Manual down            : D-pad Down, 60 RPM.
 Claw                   : ADI F; R2 toggle.
 Lift motor ports       : 4 and 5 are still labelled as placeholders.
 
@@ -94,6 +99,7 @@ Tuning and button assignments are in include/robot/config.hpp:
   liftClawPickupDegrees       : closed-claw clearance (currently 10).
   liftClawReturnMaxDegrees    : near-floor return band, automatically 2x clearance.
   liftDownSlowVelocityRpm     : held-L2 speed (currently 60).
+  liftManualDownVelocityRpm   : held-D-pad-Down speed (currently 60).
   liftUpVelocityRpm           : up and normal return speed (currently 100).
   liftClawOpenWaitMs          : minimum scoring delay (currently 250).
   liftPullAwayDistanceIn      : required drive-away distance (currently 3).
@@ -151,7 +157,7 @@ DECLARATIONS -> include/robot/hardware.hpp
 
 LIFT TUNING AND BUTTONS -> include/robot/config.hpp
   Use the lift settings listed in CURRENT SETUP NOTES above.
-  Change liftUpButton, liftDownButton, liftResetButton, or
+  Change liftUpButton, liftDownButton, liftManualDownButton, liftResetButton, or
   openClawToggleButton to remap the driver controls.
   Keep liftClawPickupDegrees below the upper limit and the slow lowering
   speed below the normal lift speed. Angles are motor degrees; speeds are RPM.

@@ -90,6 +90,7 @@ void disabled() {
 	// Cancel any pending lift return when competition control disables the robot.
 	lift_reset();
 	lift_up();
+	lift_manual_down();
 	lift_down();
 }
 
@@ -155,6 +156,7 @@ void opcontrol() {
 		handleClawControl();
 		lift_reset();
 		lift_up();
+		lift_manual_down();
 		lift_down();
 
 		// get joystick positions

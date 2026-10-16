@@ -5,7 +5,6 @@
 #include "robot/lift.hpp"
 #include "pros/llemu.hpp"
 #include "pros/rtos.hpp"
-#include <cmath>
 
 namespace {
 bool moveLift(double targetDegrees, int velocityRpm) {
@@ -17,17 +16,13 @@ bool moveLift(double targetDegrees, int velocityRpm) {
 	return false;
 }
 
-bool clearedWall() {
-	// simple_drive_distance() zeroes these first-motor encoders and selects
-	// degrees. Check the completed 20-inch move directly; this old routine's
-	// encoder helpers do not preserve an odometry reference for pull-away checks.
-	const double leftDegrees = std::fabs(leftMotors.get_position(0));
-	const double rightDegrees = std::fabs(rightMotors.get_position(0));
-	if (!std::isfinite(leftDegrees) || !std::isfinite(rightDegrees)) return false;
-	constexpr double pi = 3.141592653589793;
-	const double distanceInches = (leftDegrees + rightDegrees) / 2.0 / 360.0 *
-	    (kDriveWheelRpm / kMotorCartridgeRpm) * pi * kDriveWheelDiameterIn;
-	return distanceInches >= liftPullAwayDistanceIn;
+bool checkDrive(bool completed) {
+	if (completed) return true;
+	leftMotors.brake();
+	rightMotors.brake();
+	liftMotors.brake();
+	pros::lcd::set_text(4, "Auton: drive move failed");
+	return false;
 }
 } // namespace
 
@@ -45,12 +40,12 @@ void simple_auton() {
 	constexpr double forwardDistanceInches = 15.0;
 	constexpr std::int32_t drivePower = 60;
 	for (int movement = 0; movement < 2; movement++) {
-		simple_drive_distance(backwardDistanceInches, drivePower);
-		simple_drive_distance(forwardDistanceInches, drivePower);
+		if (!checkDrive(simple_drive_distance(backwardDistanceInches, drivePower))) return;
+		if (!checkDrive(simple_drive_distance(forwardDistanceInches, drivePower))) return;
 	}
-	simple_drive_distance(-16.0, drivePower);
-	simple_turn_degrees(-110.0, 50);
-	simple_drive_backward_until_wall(50, 2000);
+	if (!checkDrive(simple_drive_distance(-16.0, drivePower))) return;
+	if (!checkDrive(simple_turn_degrees(-110.0, 50))) return;
+	if (!checkDrive(simple_drive_backward_until_wall(50, 2000))) return;
 
 	// Replace cascade 350 with a tunable placement height, then release once.
 	if (!moveLift(simpleAutonLiftReleaseDegrees, liftDownSlowVelocityRpm)) return;
@@ -58,13 +53,11 @@ void simple_auton() {
 	pros::delay(liftClawOpenWaitMs);
 
 	// Keep the lift held during the original turn and drive away from the score.
-	simple_turn_degrees(200.0, 60);
-	simple_drive_distance(20.0, 60);
-	if (!clearedWall()) {
-		pros::lcd::set_text(4, "Auton: no pull-away");
-		return; // Stay raised instead of lowering while still against the score.
-	}
+	if (!checkDrive(simple_turn_degrees(200.0, 60))) return;
+	// Require the full drive-away to finish before lowering. A stalled drive
+	// leaves the lift held at placement height and aborts the remaining routine.
+	if (!checkDrive(simple_drive_distance(20.0, 60))) return;
 	if (!moveLift(liftLowerLimitDegrees, liftUpVelocityRpm)) return;
-	simple_turn_degrees(-100.0, 60);
+	if (!checkDrive(simple_turn_degrees(-100.0, 60))) return;
 	pros::lcd::set_text(4, "Auton: complete");
 }

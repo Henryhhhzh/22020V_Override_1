@@ -90,6 +90,7 @@ void requestLiftPickupAssist(bool clawClosed) {
 	                         loweringPhase == LoweringPhase::pickupReturning;
 	if (!pickupOrIdle ||
 	    controller.get_digital(liftUpButton) || controller.get_digital(liftDownButton) ||
+	    controller.get_digital(liftManualDownButton) ||
 	    controller.get_digital(liftResetButton)) return;
 	if (!clawClosed && liftWithinPickupBand()) {
 		// An OPEN click near the floor requests zero; an OPEN click high up holds.
@@ -119,7 +120,8 @@ void lift_reset() {
 
 	// A deliberate lift input can interrupt the reset once R1 is released.
 	if (!resetHeld && (controller.get_digital(liftUpButton) ||
-	                   controller.get_digital(liftDownButton))) {
+	                   controller.get_digital(liftDownButton) ||
+	                   controller.get_digital(liftManualDownButton))) {
 		loweringPhase = LoweringPhase::idle;
 		liftMotors.brake();
 		return;
@@ -150,6 +152,23 @@ void lift_up() {
 	liftMotors.move_absolute(liftUpperLimitDegrees, liftUpVelocityRpm);
 }
 
+void lift_manual_down() {
+	if (pros::competition::is_disabled()) {
+		loweringPhase = LoweringPhase::idle;
+		manualClawTogglePending = false;
+		liftMotors.brake();
+		return;
+	}
+	if (!controller.get_digital(liftManualDownButton) ||
+	    controller.get_digital(liftResetButton) ||
+	    controller.get_digital(liftUpButton) ||
+	    loweringPhase == LoweringPhase::resetting) return;
+
+	// No release sequence: the normal idle branch in lift_down() brakes on release.
+	loweringPhase = LoweringPhase::idle;
+	moveToLiftMinimum(liftManualDownVelocityRpm);
+}
+
 void lift_down() {
 	const bool manualClawToggled = manualClawTogglePending;
 	manualClawTogglePending = false;
@@ -160,7 +179,8 @@ void lift_down() {
 	}
 	// lift_reset() owns reset movement; scoring must not overwrite its command.
 	if (loweringPhase == LoweringPhase::resetting ||
-	    controller.get_digital(liftResetButton) || controller.get_digital(liftUpButton)) return;
+	    controller.get_digital(liftResetButton) || controller.get_digital(liftUpButton) ||
+	    controller.get_digital(liftManualDownButton)) return;
 
 	const TravelStatus travel = liftTravelStatus(false);
 	if (travel == TravelStatus::error) {

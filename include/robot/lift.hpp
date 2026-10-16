@@ -1,14 +1,19 @@
 #pragma once
 
-// Call lift_reset(), lift_up(), then lift_down() every driver-loop iteration.
+// Call lift_reset(), lift_up(), lift_manual_down(), then lift_down() each driver loop.
 // All stops use the configured PROS HOLD brake. Driver controls are nonblocking.
 // R1 returns to the current minimum (raised if closed, zero if open), cancelling
 // pending sequences. Encoder zero itself never changes.
-// After releasing R1, L1 or L2 can interrupt the reset.
+// After releasing R1, L1, L2, or manual down can interrupt the reset.
 void lift_reset();
 
 // L1 raises to the upper limit and cancels any pending lowering sequence.
 void lift_up();
+
+// D-pad Down lowers only while held, respecting the current claw-dependent floor.
+// Release holds with PROS HOLD. Cancels scoring sequences without changing the claw.
+// Reset and up take priority; manual down takes priority over scoring down.
+void lift_manual_down();
 
 // L2 lowers slowly while held. Release opens the claw, holds for the configured
 // minimum wait and driver pull-away distance, then lowers to the current minimum
