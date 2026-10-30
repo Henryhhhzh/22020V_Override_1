@@ -48,7 +48,7 @@ void initialize() {
 	rightMotors.set_brake_mode_all(pros::MotorBrake::brake);
 
 	// Close around the preload and record the closed logical state. The first
-	// R2 click will OPEN it. Initialize at zero, then lift to the closed-claw
+	// B click will OPEN it. Initialize at zero, then lift to the closed-claw
 	// clearance automatically when driver control is enabled.
 	OpenClaw.retract();
 
@@ -167,16 +167,6 @@ void opcontrol() {
         int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
         int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
 
-        //chassis.tank(leftY, rightY);
-		// A-button drivetrain test disabled.
-		// if (controller.get_digital_new_press(DIGITAL_A)) {
-		// 	chassis.setPose(0, 0, 0);
-		// 	chassis.tank(-115, 125);
-		// 	pros::delay(400);
-		// 	chassis.turnToHeading(345, 300, {.minSpeed = 110});
-		// 	std::cout << chassis.getPose().theta;
-		// }
-        
         chassis.arcade(leftY, rightX);
         // delay to save resources
         pros::delay(50);

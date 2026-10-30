@@ -67,9 +67,9 @@ constexpr float dsrMinValidDistance = 0.5; // minimum valid distance sensor read
 constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor reading, in inches
 
 // Main claw driver control.
-constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_R2;
+constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_B;
 
-// Intake driver controls. R1/R2 are shared with lift reset and claw toggle.
+// Dedicated intake controls. Keep lift reset and claw toggle on separate buttons.
 constexpr auto intakeInButton = pros::E_CONTROLLER_DIGITAL_R1;
 constexpr auto intakeOutButton = pros::E_CONTROLLER_DIGITAL_R2;
 constexpr int intakeSpeed = 127;
@@ -88,12 +88,16 @@ constexpr unsigned int liftClawOpenWaitMs = 250; // Minimum claw opening time.
 constexpr float liftPullAwayDistanceIn = 3.0; // Actual translation before auto-lowering.
 constexpr int liftPullAwayJoystickDeadband = 15; // Ignore small throttle-stick inputs.
 // CHANGE THIS: fixed clearance above zero whenever the claw is CLOSED.
-// Every lowering/reset command respects this floor; it is not a relative nudge.
+// Manual lowering respects this floor; explicit button/macro resets return to zero.
 constexpr double liftClawPickupDegrees = 10.0; // Motor encoder degrees.
 // Return on the next manual OPEN click only within twice the pickup amount above the bottom.
 constexpr double liftClawReturnMaxDegrees = liftLowerLimitDegrees + 2.0 * liftClawPickupDegrees;
-// First click returns to the current floor; another click there tilts for intake.
-constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_R1; // Does not re-zero encoders.
+// Return to zero; once a button/macro reset finishes, each click toggles tilt.
+constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_A; // Does not re-zero encoders.
+static_assert(intakeInButton != liftResetButton && intakeOutButton != liftResetButton &&
+              intakeInButton != openClawToggleButton && intakeOutButton != openClawToggleButton &&
+              liftResetButton != openClawToggleButton,
+              "Intake, lift reset, and claw toggle must use separate buttons.");
 static_assert(liftUpperLimitDegrees > liftLowerLimitDegrees);
 static_assert(intakeSpeed > 0 && intakeSpeed <= 127);
 static_assert(liftUpVelocityRpm > 0 && liftUpVelocityRpm <= 100);

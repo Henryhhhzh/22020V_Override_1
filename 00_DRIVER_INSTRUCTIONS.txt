@@ -8,14 +8,14 @@ QUICK CONTROLS
 Left stick up/down : Drive forward/backward.
 Right stick left/right : Steer.
 L1 - HOLD : Raise the lift. Release to hold its position.
-L2 - HOLD : Lower slowly for scoring. Release to open the claw and start
-            the scoring wait/automatic return described below.
+L2 - HOLD : Lower manually at 40 RPM. Release to hold its position.
 D-pad Down - HOLD : Lower slowly for scoring at 60 RPM. Release to open the
                     claw and start the scoring wait/automatic return below.
-R1 - HOLD : Run the intake inward. First press starts lift reset; another
-            press after reaching the reset position tilts the claw for intake.
-R2 - HOLD : Run the intake outward. Also toggles the claw on each press.
-R1 reset continues after releasing R1 and does NOT recalibrate encoder zero.
+R1 - HOLD : Run the intake inward only. Release to stop.
+R2 - HOLD : Run the intake outward only. Release to stop.
+A - PRESS : Return to zero; once reset, each press toggles claw tilt.
+B - PRESS : Toggle the main claw open/closed.
+A reset continues after releasing A and does NOT recalibrate encoder zero.
 
 BEFORE STARTING THE PROGRAM
 ---------------------------
@@ -24,19 +24,21 @@ BEFORE STARTING THE PROGRAM
    the lift automatically. Do not restart with the lift raised.
 2. Keep the robot still while the IMU calibrates, roughly three seconds.
 3. Startup closes the claw for the preload and records it as CLOSED.
-   The first R2 click therefore OPENS the claw.
+   The first B click therefore OPENS the claw.
    The separate claw tilt cylinder starts EXTENDED in its normal position.
 4. When driver control starts, the closed preload is raised to the 10-degree
    clearance minimum. Opening the claw near the floor allows a return to zero.
 
 LIFT MINIMUM AND GROUND CLEARANCE
 --------------------------------
-Claw CLOSED : Minimum is 10 degrees above encoder zero.
-Claw OPEN   : Minimum is 0 degrees.
-Upper limit : Currently 100 degrees (a placeholder to tune for the real lift).
+Manual lowering, claw CLOSED : Minimum is 10 degrees above encoder zero.
+Manual lowering, claw OPEN   : Minimum is 0 degrees.
+Button/macro reset           : Returns to 0 degrees regardless of claw state.
+Upper limit                 : Currently 300 degrees (a placeholder to tune).
 
-All downward movements and R1 reset respect the current minimum.
-Closing the claw below 10 degrees raises the lift to 10 degrees.
+Manual downward movements respect the current manual minimum.
+A completed reset holds zero, even with the claw closed. A new close-claw
+command below 10 degrees raises the lift to 10 degrees and leaves reset mode.
 Closing it above 10 degrees holds the current height; it does not pull the
 lift down or add another 10 degrees. Repeated toggles do not stack height.
 
@@ -44,51 +46,54 @@ Opening manually near the floor returns the lift to zero only when BOTH
 motor encoders are within 20 degrees of zero. Opening high up does not
 automatically drop the lift.
 
-SCORING WITH L2
----------------
+SCORING WITH D-PAD DOWN
+----------------------
 1. Use L1 to raise the lift to the height you need, then release L1.
    The lift uses the built-in PROS HOLD brake.
-2. Hold L2 to lower slowly toward the score. Release when positioned.
-3. Releasing L2 opens the claw ONCE and holds the lift where it stopped.
-   An R2 click in that same control-loop iteration takes priority over the
+2. Hold D-pad Down to lower slowly toward the score. Release when positioned.
+3. Releasing D-pad Down opens the claw ONCE and holds the lift where it stopped.
+   Pressing B in that same control-loop iteration takes priority over the
    automatic opening; the scoring wait still starts normally.
 4. Wait at least 250 milliseconds for the claw, then drive away at least
-   3 inches (about 7.6 cm) from where L2 was released. Moving away during
+   3 inches (about 7.6 cm) from where D-pad Down was released. Moving away during
    that brief delay also counts, but lowering waits for the delay to finish.
-5. The lift automatically returns at normal speed to the current minimum:
-   0 degrees if open, or 10 degrees if you have closed the claw again.
+5. The lift automatically resets to 0 degrees at normal speed. Once it
+   reaches zero, A toggles claw tilt without needing another reset press.
 
 Pull-away detection requires throttle input AND measured translation.
 Turning in place alone does not count. Pushing the stick while the robot
 is blocked does not count unless odometry reports the required distance.
 If no pull-away is detected, the lift keeps holding.
 
-You may toggle R2 during the scoring wait. It does not cancel or restart
+You may toggle B during the scoring wait. It does not cancel or restart
 the wait and does not move a lift held above the clearance minimum.
 Reclosing below the minimum raises only to the clearance height.
 
 RESET AND INTERRUPTING A SEQUENCE
 --------------------------------
-R1 cancels the pending lift sequence and returns directly to the current
-minimum, without opening or closing the claw:
-  Closed claw -> 10 degrees.
-  Open claw   -> 0 degrees.
+A cancels the pending lift sequence and returns directly to encoder zero,
+without opening or closing the claw. The tilt cylinder extends for the return.
+The return continues after A is released; holding A never repeats a toggle.
 
-After reset reaches that minimum, release R1 and press it again to RETRACT
-the tilt cylinder for intake. Holding R1 does not trigger this second action.
-Further R1 presses at that reset position keep the claw tilted.
-The first reset press after startup or another lift command always resets
-normally, even if the lift is already at the minimum.
+Once a button reset, scoring return, pickup return, or autonomous zero move
+finishes, each separate A click alternates the tilt cylinder:
+  First A from a raised lift : Reset to zero, tilt extended.
+  Next A at reset           : Retract (tilt for intake).
+  Next A                    : Extend (untilt).
+  Next A                    : Retract.
+  Next A                    : Extend.
+A presses made before the lift reaches zero continue the reset; they do not
+queue tilt toggles. Intake R1/R2 do not change this mode or the tilt.
 
-L1, L2, D-pad Down, manual claw pickup assistance, and autonomous lift moves
-restore the tilt cylinder to EXTENDED before commanding lift movement.
-Disabling also restores extension. After another lift command, reset again
-before using the extra R1 press to tilt. Normal lift travel keeps it extended.
+L1, L2, D-pad Down, claw pickup/clearance commands, and autonomous lift moves
+restore extension and leave tilt-toggle mode. The next A press returns to zero.
+A macro that then returns to zero enables tilt toggling again automatically.
+Disabling restores extension and clears the reset/toggle mode.
 
-Holding R1 gives reset priority over the other lift controls. After releasing
-R1, holding L1, L2, or D-pad Down interrupts the reset. These controls also
+Holding A gives reset priority over the other lift controls. After releasing
+A, holding L1, L2, or D-pad Down interrupts the reset. These controls also
 interrupt the scoring wait/automatic return. L1 wins over either down control;
-D-pad Down wins over L2.
+L2 wins over D-pad Down.
 Disabling the robot cancels pending lift sequences.
 
 BRAIN DISPLAY
@@ -103,10 +108,10 @@ Lift up / normal return : 100 RPM, red cartridges.
 Slow scoring lower     : D-pad Down, 60 RPM.
 Manual down            : L2, 40 RPM.
 Intake                 : port 2, green cartridge setting; R1 in, R2 out.
-Claw                   : ADI H; R2 toggles on press (shared with intake out).
+Claw                   : ADI H; B toggles on press.
 Claw tilt              : ADI G; extended normally, retracted for intake tilt.
 Lift motors            : ports 1 (reversed) and 10, red cartridges.
-R1 also starts lift reset while held (shared with intake in).
+Lift reset / tilt      : A; separate from the intake controls.
 IMU                    : smart port 14; move the IMU cable here.
 Horizontal rotation    : smart port 7.
 
@@ -125,7 +130,8 @@ AUTONOMOUS - FIRST-PASS SIMPLE ROUTINE
 ramsete_auton_example() is currently selected in src/main.cpp. To select
 simple_auton(), uncomment that call there. The simple auton closes the preload
 claw and tests the lift up and back down. The lift helper clamps its requested
-200 and 0 motor degrees to the configured upper limit and claw-dependent floor.
+200 motor degrees to the configured upper limit and claw-dependent floor;
+the zero target resets to encoder zero and enables the A tilt toggle.
 
 The encoder drive helpers preserve encoder zero and units, so odometry and
 driver scoring pull-away detection can continue after this routine. Distances
@@ -155,8 +161,8 @@ Edit the existing device definitions here; do not create a second copy.
     The claw uses ADI port H. Startup calls retract() to close it for preload.
 
   ClawTilt('G', true, false)
-    The tilt cylinder uses ADI port G and starts extended. A second reset
-    press at the reset position retracts it; other lift commands extend it.
+    The tilt cylinder uses ADI port G and starts extended. After reset reaches
+    zero, each A press toggles it; other lift commands restore extension.
 
   imu(14) / horizontalEnc(-7)
     The IMU is on smart port 14; move its cable to match. The horizontal

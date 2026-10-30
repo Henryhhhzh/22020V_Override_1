@@ -8,6 +8,6 @@ void toggleOpenClaw();
 void tiltClawForIntake();
 void restoreClawTilt();
 
-// R2 toggles once per click. Button release does nothing.
+// B toggles once per click. Button release does nothing.
 // Closing enables the raised lift floor; opening near zero requests its return.
 void handleClawControl();
