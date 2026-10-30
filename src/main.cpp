@@ -29,7 +29,8 @@ void on_center_button() {
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
-	restoreClawTilt();
+	// Tilt is fixed in its default extended position; there is no tilt control.
+	ClawTilt.extend();
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
 
@@ -48,7 +49,7 @@ void initialize() {
 	rightMotors.set_brake_mode_all(pros::MotorBrake::brake);
 
 	// Close around the preload and record the closed logical state. The first
-	// B click will OPEN it. Initialize at zero, then lift to the closed-claw
+	// Y click will OPEN it. Initialize at zero, then lift to the closed-claw
 	// clearance automatically when driver control is enabled.
 	OpenClaw.retract();
 

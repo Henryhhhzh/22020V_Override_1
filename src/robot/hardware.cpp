@@ -22,7 +22,7 @@ pros::MotorGroup intakeMotors({2}, pros::MotorGearset::green);
 // Main claw on ADI H. initialize() retracts it to secure the preload.
 pros::adi::Pneumatics OpenClaw('H', true, false);
 
-// Claw tilt on ADI G. Start extended; retract only for the intake tilt.
+// Claw tilt on ADI G. Always extended; no driver or macro tilt control.
 pros::adi::Pneumatics ClawTilt('G', true, false);
 
 // Port 19 is now a drive motor; move the IMU to smart port 14.

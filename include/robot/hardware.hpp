@@ -26,7 +26,7 @@ extern pros::MotorGroup intakeMotors;
 // Main claw pneumatic on ADI H.
 extern pros::adi::Pneumatics OpenClaw;
 
-// Claw tilt pneumatic on ADI G; extended is the default lift position.
+// Claw tilt pneumatic on ADI G; fixed extended with no tilt control.
 extern pros::adi::Pneumatics ClawTilt;
 
 // Inertial sensor

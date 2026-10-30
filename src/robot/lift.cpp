@@ -1,6 +1,5 @@
 #include "robot/lift.hpp"
 
-#include "robot/claw.hpp"
 #include "robot/hardware.hpp"
 #include "pros/rtos.hpp"
 #include <algorithm>
@@ -17,8 +16,7 @@ float releaseX = 0.0;
 float releaseY = 0.0;
 bool pullAwayConfirmed = false;
 bool manualClawTogglePending = false;
-enum class ResetMode { normalLift, returningToZero, atZero };
-ResetMode resetMode = ResetMode::normalLift;
+bool holdingResetZero = false;
 
 enum class TravelStatus { ready, limit, error };
 
@@ -39,33 +37,31 @@ bool liftAtResetPosition() {
 	return true;
 }
 
-void cancelResetTilt() {
-	resetMode = ResetMode::normalLift;
-	restoreClawTilt();
+void clearResetHold() {
+	holdingResetZero = false;
 }
 
-// Button resets and macro returns share the same zero and tilt-toggle state.
+// Button resets and macro returns both hold encoder zero on completion.
 bool moveToResetPosition() {
-	restoreClawTilt();
 	if (liftAtResetPosition()) {
-		resetMode = ResetMode::atZero;
+		holdingResetZero = true;
 		liftMotors.brake();
 		return false;
 	}
 	const auto positions = liftMotors.get_position_all();
 	if (positions.empty()) {
-		cancelResetTilt();
+		clearResetHold();
 		liftMotors.brake();
 		return false;
 	}
 	for (const double position : positions) {
 		if (!std::isfinite(position)) {
-			cancelResetTilt();
+			clearResetHold();
 			liftMotors.brake();
 			return false;
 		}
 	}
-	resetMode = ResetMode::returningToZero;
+	holdingResetZero = false;
 	liftMotors.move_absolute(liftLowerLimitDegrees, liftUpVelocityRpm);
 	return true;
 }
@@ -96,7 +92,7 @@ bool liftWithinPickupBand() {
 
 bool raiseToClosedFloorIfNeeded() {
 	// A completed reset holds zero until another lift command leaves reset mode.
-	if (resetMode != ResetMode::normalLift) return false;
+	if (holdingResetZero) return false;
 	if (OpenClaw.is_extended()) return false;
 	const auto positions = liftMotors.get_position_all();
 	if (positions.empty()) return false;
@@ -107,7 +103,6 @@ bool raiseToClosedFloorIfNeeded() {
 	}
 	if (!belowFloor) return false;
 	// Leave scoring HOLD positions above the floor completely alone.
-	restoreClawTilt();
 	liftMotors.move_absolute(liftEffectiveLowerLimit(), liftUpVelocityRpm);
 	return true;
 }
@@ -116,7 +111,6 @@ bool raiseToClosedFloorIfNeeded() {
 bool moveToLiftMinimum(int velocityRpm) {
 	const TravelStatus travel = liftTravelStatus(false);
 	if (travel == TravelStatus::error) {
-		restoreClawTilt();
 		liftMotors.brake();
 		return false;
 	}
@@ -125,7 +119,6 @@ bool moveToLiftMinimum(int velocityRpm) {
 		liftMotors.brake();
 		return false;
 	}
-	restoreClawTilt();
 	liftMotors.move_absolute(liftEffectiveLowerLimit(), velocityRpm);
 	return true;
 }
@@ -133,7 +126,7 @@ bool moveToLiftMinimum(int velocityRpm) {
 
 void requestLiftPickupAssist(bool clawClosed) {
 	if (pros::competition::is_disabled()) return;
-	cancelResetTilt();
+	clearResetHold();
 	// The manual toggle must win if D-pad Down is also released in this driver tick.
 	// lift_down() consumes this even when another lift control has priority.
 	manualClawTogglePending = true;
@@ -156,46 +149,25 @@ void requestLiftPickupAssist(bool clawClosed) {
 
 void lift_reset() {
 	if (pros::competition::is_disabled()) {
-		cancelResetTilt();
+		clearResetHold();
 		loweringPhase = LoweringPhase::idle;
 		manualClawTogglePending = false;
 		liftMotors.brake();
 		return;
 	}
+	if (holdingResetZero && !liftAtResetPosition()) clearResetHold();
 	const bool resetHeld = controller.get_digital(liftResetButton);
-	const bool otherLiftHeld = controller.get_digital(liftUpButton) ||
-	                           controller.get_digital(liftDownButton) ||
-	                           controller.get_digital(liftManualDownButton);
-	if (otherLiftHeld) cancelResetTilt();
-	// Recognize completion before processing this click, including when the
-	// encoders first reach zero in the same iteration as a fresh A press.
-	if (resetMode == ResetMode::returningToZero &&
-	    (loweringPhase == LoweringPhase::resetting ||
-	     loweringPhase == LoweringPhase::returningToBottom ||
-	     loweringPhase == LoweringPhase::pickupReturning) && liftAtResetPosition()) {
-		resetMode = ResetMode::atZero;
-		loweringPhase = LoweringPhase::idle;
-		liftMotors.brake();
-	}
-	if (resetMode == ResetMode::atZero && !liftAtResetPosition()) cancelResetTilt();
 	if (controller.get_digital_new_press(liftResetButton)) {
-		if (resetMode == ResetMode::atZero && !otherLiftHeld &&
-		    loweringPhase == LoweringPhase::idle && liftAtResetPosition()) {
-			if (ClawTilt.is_extended()) tiltClawForIntake();
-			else restoreClawTilt();
-			liftMotors.brake();
-			return;
-		}
-		restoreClawTilt();
-		resetMode = ResetMode::returningToZero;
+		clearResetHold();
 		loweringPhase = LoweringPhase::resetting;
 	}
 	if (loweringPhase != LoweringPhase::resetting) return;
 
-	// A deliberate lift input can interrupt the reset once A is released.
+	// Other lift inputs can interrupt once D-pad Right is released.
 	if (!resetHeld && (controller.get_digital(liftUpButton) ||
 	                   controller.get_digital(liftDownButton) ||
 	                   controller.get_digital(liftManualDownButton))) {
+		clearResetHold();
 		loweringPhase = LoweringPhase::idle;
 		liftMotors.brake();
 		return;
@@ -217,7 +189,7 @@ void lift_up() {
 	    loweringPhase == LoweringPhase::resetting) return;
 
 	// Up takes priority when both buttons are held.
-	cancelResetTilt();
+	clearResetHold();
 	loweringPhase = LoweringPhase::idle;
 	if (liftTravelStatus(true) != TravelStatus::ready) {
 		liftMotors.brake();
@@ -240,7 +212,7 @@ void lift_manual_down() {
 	    loweringPhase == LoweringPhase::resetting) return;
 
 	// No release sequence: the normal idle branch in lift_down() brakes on release.
-	cancelResetTilt();
+	clearResetHold();
 	loweringPhase = LoweringPhase::idle;
 	moveToLiftMinimum(liftManualDownVelocityRpm);
 }
@@ -260,14 +232,14 @@ void lift_down() {
 
 	const TravelStatus travel = liftTravelStatus(false);
 	if (travel == TravelStatus::error) {
-		cancelResetTilt();
+		clearResetHold();
 		loweringPhase = LoweringPhase::idle;
 		liftMotors.brake();
 		return;
 	}
 
 	if (controller.get_digital(liftDownButton)) {
-		cancelResetTilt();
+		clearResetHold();
 		loweringPhase = LoweringPhase::manual;
 		moveToLiftMinimum(liftDownSlowVelocityRpm);
 		return;
@@ -320,7 +292,7 @@ void lift_down() {
 }
 
 bool lift_move_to(double targetDegrees, int velocityRpm, unsigned int timeoutMs) {
-	cancelResetTilt();
+	clearResetHold();
 	loweringPhase = LoweringPhase::idle;
 	manualClawTogglePending = false;
 	liftMotors.set_brake_mode_all(pros::MotorBrake::hold);
@@ -329,7 +301,6 @@ bool lift_move_to(double targetDegrees, int velocityRpm, unsigned int timeoutMs)
 		return false;
 	}
 	const bool resetTarget = targetDegrees <= liftLowerLimitDegrees;
-	if (resetTarget) resetMode = ResetMode::returningToZero;
 
 	const unsigned int startedAt = pros::millis();
 	unsigned int settledAt = 0;
@@ -354,7 +325,7 @@ bool lift_move_to(double targetDegrees, int velocityRpm, unsigned int timeoutMs)
 				settling = true;
 			}
 			if (pros::millis() - settledAt >= liftMoveSettleMs) {
-				if (resetTarget) resetMode = ResetMode::atZero;
+				if (resetTarget) holdingResetZero = true;
 				liftMotors.brake();
 				return true;
 			}
@@ -365,7 +336,7 @@ bool lift_move_to(double targetDegrees, int velocityRpm, unsigned int timeoutMs)
 		pros::delay(10);
 	}
 
-	cancelResetTilt();
+	clearResetHold();
 	liftMotors.brake();
 	return false;
 }

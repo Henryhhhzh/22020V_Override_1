@@ -67,7 +67,7 @@ constexpr float dsrMinValidDistance = 0.5; // minimum valid distance sensor read
 constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor reading, in inches
 
 // Main claw driver control.
-constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_B;
+constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_Y;
 
 // Dedicated intake controls. Keep lift reset and claw toggle on separate buttons.
 constexpr auto intakeInButton = pros::E_CONTROLLER_DIGITAL_R1;
@@ -92,12 +92,20 @@ constexpr int liftPullAwayJoystickDeadband = 15; // Ignore small throttle-stick 
 constexpr double liftClawPickupDegrees = 10.0; // Motor encoder degrees.
 // Return on the next manual OPEN click only within twice the pickup amount above the bottom.
 constexpr double liftClawReturnMaxDegrees = liftLowerLimitDegrees + 2.0 * liftClawPickupDegrees;
-// Return to zero; once a button/macro reset finishes, each click toggles tilt.
-constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_A; // Does not re-zero encoders.
-static_assert(intakeInButton != liftResetButton && intakeOutButton != liftResetButton &&
-              intakeInButton != openClawToggleButton && intakeOutButton != openClawToggleButton &&
-              liftResetButton != openClawToggleButton,
-              "Intake, lift reset, and claw toggle must use separate buttons.");
+// Return to zero on D-pad Right. Does not re-zero encoders.
+constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_RIGHT;
+static_assert([] {
+	constexpr decltype(intakeInButton) buttons[] = {
+	    intakeInButton, intakeOutButton, liftUpButton, liftManualDownButton,
+	    liftDownButton, liftResetButton, openClawToggleButton};
+	constexpr auto count = sizeof(buttons) / sizeof(buttons[0]);
+	for (unsigned int first = 0; first < count; ++first) {
+		for (unsigned int second = first + 1; second < count; ++second) {
+			if (buttons[first] == buttons[second]) return false;
+		}
+	}
+	return true;
+}(), "Each driver control must use a separate button.");
 static_assert(liftUpperLimitDegrees > liftLowerLimitDegrees);
 static_assert(intakeSpeed > 0 && intakeSpeed <= 127);
 static_assert(liftUpVelocityRpm > 0 && liftUpVelocityRpm <= 100);

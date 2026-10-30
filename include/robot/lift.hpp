@@ -2,12 +2,10 @@
 
 // Call lift_reset(), lift_up(), lift_manual_down(), then lift_down() each driver loop.
 // All stops use the configured PROS HOLD brake. Driver controls are nonblocking.
-// A returns to encoder zero regardless of claw state, cancelling
-// pending sequences. Encoder zero itself never changes.
-// After a button or macro reset reaches zero, each A click toggles claw tilt.
-// Holding A never repeats the toggle. Other lift inputs extend the tilt and
-// restore A's return-to-zero action.
-// After releasing A, L1, L2, or D-pad Down can interrupt the reset.
+// D-pad Right returns to encoder zero regardless of claw state, cancelling
+// pending sequences. Encoder zero itself never changes. The reset continues
+// after release; another lift input can interrupt once Right is released.
+// Repeated reset presses only reset the lift; there is no tilt action.
 void lift_reset();
 
 // L1 raises to the upper limit and cancels any pending lowering sequence.
@@ -34,7 +32,7 @@ void requestLiftPickupAssist(bool clawClosed);
 
 // Blocking autonomous move, independent of controller buttons. Clamp the target
 // to the live claw-dependent minimum and upper limit, except targets at/below
-// zero reset to zero and enable the A tilt toggle after settling. Return false on timeout,
+// zero reset to zero. Return false on timeout,
 // disabled state, or bad encoder readings; always finish with PROS HOLD braking.
 // Encoder zero is preserved. Do not run concurrently with driver lift controls.
 bool lift_move_to(double targetDegrees, int velocityRpm, unsigned int timeoutMs);
