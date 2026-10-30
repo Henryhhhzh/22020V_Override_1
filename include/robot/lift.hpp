@@ -4,6 +4,8 @@
 // All stops use the configured PROS HOLD brake. Driver controls are nonblocking.
 // R1 returns to the current minimum (raised if closed, zero if open), cancelling
 // pending sequences. Encoder zero itself never changes.
+// After a reset reaches its floor, a separate R1 click retracts the claw tilt
+// for intake. Other lift inputs restore the extended tilt and require a new reset.
 // After releasing R1, L1, L2, or manual down can interrupt the reset.
 void lift_reset();
 

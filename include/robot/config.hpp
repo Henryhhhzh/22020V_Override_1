@@ -69,16 +69,21 @@ constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor re
 // Main claw driver control.
 constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_R2;
 
+// Intake driver controls. R1/R2 are shared with lift reset and claw toggle.
+constexpr auto intakeInButton = pros::E_CONTROLLER_DIGITAL_R1;
+constexpr auto intakeOutButton = pros::E_CONTROLLER_DIGITAL_R2;
+constexpr int intakeSpeed = 127;
+
 // Lift travel limits in MOTOR encoder degrees, with the lift lowered at startup.
 constexpr double liftLowerLimitDegrees = 0.0;
-// CHANGE THIS: 100 degrees is a placeholder. Set the new lift's real upper limit.
-constexpr double liftUpperLimitDegrees = 100.0;
+// CHANGE THIS: set to the new lift's real upper limit.
+constexpr double liftUpperLimitDegrees = 300.0;
 constexpr auto liftUpButton = pros::E_CONTROLLER_DIGITAL_L1;
 constexpr int liftUpVelocityRpm = 100; // Red cartridges: maximum 100 rpm.
-constexpr auto liftDownButton = pros::E_CONTROLLER_DIGITAL_L2;
-constexpr int liftDownSlowVelocityRpm = 60; // CHAGE THIS to tune held-button lowering.
-constexpr auto liftManualDownButton = pros::E_CONTROLLER_DIGITAL_DOWN;
-constexpr int liftManualDownVelocityRpm = 60; // Plain held-button lowering speed.
+constexpr auto liftDownButton = pros::E_CONTROLLER_DIGITAL_DOWN;
+constexpr int liftDownSlowVelocityRpm = 60; // Change this to tune held-button lowering.
+constexpr auto liftManualDownButton = pros::E_CONTROLLER_DIGITAL_L2;
+constexpr int liftManualDownVelocityRpm = 40; // Plain held-button lowering speed.
 constexpr unsigned int liftClawOpenWaitMs = 250; // Minimum claw opening time.
 constexpr float liftPullAwayDistanceIn = 3.0; // Actual translation before auto-lowering.
 constexpr int liftPullAwayJoystickDeadband = 15; // Ignore small throttle-stick inputs.
@@ -87,8 +92,10 @@ constexpr int liftPullAwayJoystickDeadband = 15; // Ignore small throttle-stick 
 constexpr double liftClawPickupDegrees = 10.0; // Motor encoder degrees.
 // Return on the next manual OPEN click only within twice the pickup amount above the bottom.
 constexpr double liftClawReturnMaxDegrees = liftLowerLimitDegrees + 2.0 * liftClawPickupDegrees;
-constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_R1; // Return to current floor; does not re-zero encoders.
+// First click returns to the current floor; another click there tilts for intake.
+constexpr auto liftResetButton = pros::E_CONTROLLER_DIGITAL_R1; // Does not re-zero encoders.
 static_assert(liftUpperLimitDegrees > liftLowerLimitDegrees);
+static_assert(intakeSpeed > 0 && intakeSpeed <= 127);
 static_assert(liftUpVelocityRpm > 0 && liftUpVelocityRpm <= 100);
 static_assert(liftDownSlowVelocityRpm > 0 && liftDownSlowVelocityRpm < liftUpVelocityRpm);
 static_assert(liftManualDownVelocityRpm > 0 && liftManualDownVelocityRpm <= 100);

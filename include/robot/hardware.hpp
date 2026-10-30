@@ -21,9 +21,13 @@ extern pros::Controller controller;
 extern pros::MotorGroup leftMotors;
 extern pros::MotorGroup rightMotors;
 extern pros::MotorGroup liftMotors;
+extern pros::MotorGroup intakeMotors;
 
-// Main claw pneumatic on ADI F.
+// Main claw pneumatic on ADI H.
 extern pros::adi::Pneumatics OpenClaw;
+
+// Claw tilt pneumatic on ADI G; extended is the default lift position.
+extern pros::adi::Pneumatics ClawTilt;
 
 // Inertial sensor
 extern pros::Imu imu;

@@ -42,8 +42,8 @@ standalone DSR examples were also left as they were.
 
 The old mechanism task, initialization, displays, and driver bindings are no longer
 called. The original `simple_auton()` remains here for reference. A replacement
-`src/autons/simple_auton.cpp` now uses the rebuilt lift and main claw and is selected
-in `autonomous()`; it preserves the old drive sequence with trial lift heights.
+`src/autons/simple_auton.cpp` now tests the rebuilt lift and main claw. The current
+`autonomous()` selection runs the circle-test Ramsete paths.
 Driver control still uses the same arcade inputs and 50 ms loop delay.
 
 Only the main pneumatic claw is restored to active `robot/claw.hpp` and

@@ -9,18 +9,24 @@
 pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
 // motor groups
-pros::MotorGroup leftMotors({1, -2, -3}, pros::MotorGearset::blue); // left drive motors, reversed
-pros::MotorGroup rightMotors({-10, 9, 8}, pros::MotorGearset::blue); // right drive motors
+pros::MotorGroup leftMotors({11, -12, -13}, pros::MotorGearset::blue); // left drive motors
+pros::MotorGroup rightMotors({18, 19, -20}, pros::MotorGearset::blue); // right drive motors
 
-// Lift motors: placeholder ports 4 and 5, using red (100 rpm) cartridges.
-// Update ports, reversal signs, and gearing to match the new lift hardware.
-pros::MotorGroup liftMotors({4, 5}, pros::MotorGearset::red);
+// Lift motors on ports 1 and 10, using red (100 rpm) cartridges.
+pros::MotorGroup liftMotors({-1, 10}, pros::MotorGearset::red);
 
-// Main claw on ADI F: start CLOSED for the preload (logical retracted).
-pros::adi::Pneumatics OpenClaw('F', false, true); // Inverted: retracted is physically closed.
+// Intake motor on port 2. Green is a provisional cartridge setting; update it
+// if the installed motor uses a different cartridge.
+pros::MotorGroup intakeMotors({2}, pros::MotorGearset::green);
 
-// Inertial sensor on confirmed port 19.
-pros::Imu imu(19);
+// Main claw on ADI H. initialize() retracts it to secure the preload.
+pros::adi::Pneumatics OpenClaw('H', true, false);
+
+// Claw tilt on ADI G. Start extended; retract only for the intake tilt.
+pros::adi::Pneumatics ClawTilt('G', true, false);
+
+// Port 19 is now a drive motor; move the IMU to smart port 14.
+pros::Imu imu(14);
 
 // tracking wheels
 // Horizontal Rotation Sensor on confirmed port 7. Reverse the reported

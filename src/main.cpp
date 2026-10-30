@@ -2,6 +2,7 @@
 #include "autons/autons.hpp"
 #include "robot/claw.hpp"
 #include "robot/hardware.hpp"
+#include "robot/intake.hpp"
 #include "robot/lift.hpp"
 #include <cmath>
 
@@ -28,6 +29,7 @@ void on_center_button() {
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
+	restoreClawTilt();
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
 
@@ -127,10 +129,10 @@ void competition_initialize() {}
  * from where it left off.
  */
 void autonomous() {
-	// First-pass restored routine for the new lift and main claw.
-	simple_auton();
-	// To select the circle test instead, call:
-	//   ramsete_auton_example();
+	// The current test run uses the circle-test Ramsete paths.
+	ramsete_auton_example();
+	// To select the lift-only routine instead, call:
+	//   simple_auton();
 	// To run the five planner exports in static/ instead, call:
 	//   bot1_auton1();
 }
@@ -158,6 +160,8 @@ void opcontrol() {
 		lift_up();
 		lift_manual_down();
 		lift_down();
+		intake_in();
+		intake_out();
 
 		// get joystick positions
         int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
