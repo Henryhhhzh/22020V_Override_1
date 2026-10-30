@@ -16,6 +16,13 @@ WARNFLAGS+=
 EXTRA_CFLAGS=
 EXTRA_CXXFLAGS=
 
+# Use the compiler installed by the PROS extension when it is available.
+# The older Homebrew ARM compiler cannot build this project's C/C++ standards.
+PROS_VSCODE_TOOLCHAIN := $(HOME)/Library/Application Support/Code/User/globalStorage/sigbots.pros/install/pros-toolchain-macos/bin
+ifneq ($(shell test -x "$(PROS_VSCODE_TOOLCHAIN)/arm-none-eabi-g++" && echo found),)
+export PATH := $(PROS_VSCODE_TOOLCHAIN):$(PATH)
+endif
+
 # Set to 1 to enable hot/cold linking
 USE_PACKAGE:=1
 

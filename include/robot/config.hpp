@@ -67,11 +67,11 @@ constexpr float dsrMinValidDistance = 0.5; // minimum valid distance sensor read
 constexpr float dsrMaxValidDistance = 100.0; // maximum valid distance sensor reading, in inches
 
 // Main claw driver control.
-constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_Y;
+constexpr auto openClawToggleButton = pros::E_CONTROLLER_DIGITAL_R2;
 
 // Dedicated intake controls. Keep lift reset and claw toggle on separate buttons.
 constexpr auto intakeInButton = pros::E_CONTROLLER_DIGITAL_R1;
-constexpr auto intakeOutButton = pros::E_CONTROLLER_DIGITAL_R2;
+constexpr auto intakeOutButton = pros::E_CONTROLLER_DIGITAL_A;
 constexpr int intakeSpeed = 127;
 
 // Lift travel limits in MOTOR encoder degrees, with the lift lowered at startup.

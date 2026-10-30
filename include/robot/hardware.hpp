@@ -5,7 +5,6 @@
 #include "pros/imu.hpp"
 #include "pros/misc.hpp"
 #include "pros/motor_group.hpp"
-#include "pros/motors.hpp"
 #include "pros/rotation.hpp"
 #include "robot/config.hpp"
 

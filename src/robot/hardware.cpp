@@ -17,7 +17,7 @@ pros::MotorGroup liftMotors({-1, 10}, pros::MotorGearset::red);
 
 // Intake motor on port 2. Green is a provisional cartridge setting; update it
 // if the installed motor uses a different cartridge.
-pros::MotorGroup intakeMotors({2}, pros::MotorGearset::green);
+pros::MotorGroup intakeMotors({-2}, pros::MotorGearset::green);
 
 // Main claw on ADI H. initialize() retracts it to secure the preload.
 pros::adi::Pneumatics OpenClaw('H', true, false);
